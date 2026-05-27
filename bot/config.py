@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def _require(key: str) -> str:
-    value = os.environ.get(key)
+    value = os.environ.get(key, "").strip()
     if not value:
         raise RuntimeError(f"Missing required environment variable: {key}")
     return value
