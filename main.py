@@ -6,6 +6,7 @@ from bot.auth import build_auth_filter
 from bot.handlers.menu import start_handler, menu_callback_handler
 from bot.handlers.analyze import build_analyze_handler
 from bot.handlers.learn import build_learn_handler
+from bot.handlers.finance import build_finance_handler
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -23,6 +24,7 @@ def main() -> None:
         app.add_handler(handler)
 
     app.add_handler(build_learn_handler(auth))
+    app.add_handler(build_finance_handler(auth))
 
     logging.getLogger(__name__).info("Bot started, polling...")
     app.run_polling()
