@@ -1,0 +1,19 @@
+services:
+  - type: worker
+    name: stock-telegram-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt && python scripts/download_font.py
+    startCommand: python main.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO
+        sync: false
+      - key: LLM_PROVIDER
+        value: anthropic
+      - key: ALLOWED_TELEGRAM_ID
+        sync: false

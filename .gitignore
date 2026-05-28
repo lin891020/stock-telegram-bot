@@ -1,10 +1,13 @@
+.env
 __pycache__/
 *.py[cod]
-*.pyo
-.env
-.env.*
+*.egg-info/
+.pytest_cache/
+dist/
+build/
 *.otf
 *.ttf
+*.ttc
 .DS_Store
 docs/.DS_Store
 docs/superpowers/.DS_Store
