@@ -53,8 +53,11 @@ def generate_pdf(ticker: str, analysis_type: str, content: str) -> bytes:
         "ReportBody", fontName=font, fontSize=10, leading=16, spaceAfter=4,
     )
 
+    def _esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     story = [
-        Paragraph(f"{ticker} — {analysis_type}", title_style),
+        Paragraph(f"{_esc(ticker)} — {_esc(analysis_type)}", title_style),
         HRFlowable(width="100%", thickness=1, color=colors.HexColor("#cccccc")),
         Spacer(1, 0.3 * cm),
     ]
