@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 import re
 from datetime import date
@@ -127,21 +128,21 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
         price_line = _format_price(data) if isinstance(data, dict) and not data.get("error") else ""
         analysis = sections.get(t.upper(), "（無資料）")
 
-        block = label
+        block = html.escape(label)
         if price_line:
-            block += f"\n\n{price_line}"
-        block += f"\n\n{analysis}"
+            block += f"\n\n{html.escape(price_line)}"
+        block += f"\n\n{html.escape(analysis)}"
 
         items_with_url = [i for i in news_items.get(t, []) if i.get("url")]
         if items_with_url:
-            titles = "\n".join(
-                f"• {i['title'][:55]}{'…' if len(i['title']) > 55 else ''}"
+            links = "\n".join(
+                f'• <a href="{html.escape(i["url"])}">{html.escape(i["title"][:55])}{"…" if len(i["title"]) > 55 else ""}</a>'
                 for i in items_with_url[:3]
             )
-            block += f"\n\nSource:\n{titles}"
+            block += f"\n\nSource:\n{links}"
 
         output_parts.append(block)
 
-    header = f"晨報 {today}"
+    header = html.escape(f"晨報 {today}")
     body = "\n\n---\n\n".join(output_parts)
     return f"{header}\n\n{body}"

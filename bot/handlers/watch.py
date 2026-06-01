@@ -182,7 +182,7 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     try:
         summary = await fetch_and_summarize(tickers)
-        await update.message.reply_text(summary)
+        await update.message.reply_text(summary, parse_mode="HTML")
     except Exception as e:
         logger.error("news_command failed: %s", e, exc_info=True)
         await update.message.reply_text("❌ 新聞抓取失敗，請稍後再試")
@@ -199,6 +199,7 @@ async def send_daily_news(context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(
                 chat_id=int(user_id_str),
                 text=f"📰 早安！追蹤股票晨報\n\n{summary}",
+                parse_mode="HTML",
             )
         except Exception as e:
             logger.error("Daily news failed for user %s: %s", user_id_str, e, exc_info=True)
