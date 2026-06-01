@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import date
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
@@ -110,15 +111,24 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         financials_text = format_financials_for_prompt(financials)
         prompt = PROMPTS[analysis_key].format(ticker=ticker)
-        user_msg = f"即時股價資料：\n{stock_data}\n\n{financials_text}\n\n{prompt}"
+        current_date = date.today().strftime("%Y年%m月%d日")
+        user_msg = f"今天日期：{current_date}\n\n即時股價資料：\n{stock_data}\n\n{financials_text}\n\n{prompt}"
 
         content = await asyncio.to_thread(call_llm, _SYSTEM, user_msg)
 
         pdf_bytes = generate_pdf(ticker, label, content)
 
+        today = date.today().strftime("%Y%m%d")
+        company_name = stock_data.get("name", "") if isinstance(stock_data, dict) else ""
+        from bot.services.stock import is_taiwan_stock
+        if is_taiwan_stock(ticker) and company_name:
+            filename = f"{ticker}_{company_name}_{today}.pdf"
+        else:
+            filename = f"{ticker}_{today}.pdf"
+
         await query.message.reply_document(
             document=pdf_bytes,
-            filename=f"{ticker}_{analysis_key}_分析.pdf",
+            filename=filename,
             caption=f"✅ {ticker} — {label} 分析完成",
         )
         await query.edit_message_text(f"✅ {ticker} {label} 分析完成")
