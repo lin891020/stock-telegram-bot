@@ -3,8 +3,9 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
-from bot.services.stock import get_stock_summary
-from bot.services.llm import call_llm, ANTHROPIC_ANALYSIS_MODEL
+from bot.services.stock import get_stock_summary, looks_like_ticker, search_ticker
+from bot.services.financials import get_financials, format_financials_for_prompt
+from bot.services.llm import call_llm
 from bot.services.pdf import generate_pdf
 from bot.prompts.analysis import PROMPTS, ANALYSIS_BUTTONS
 
@@ -16,23 +17,65 @@ _SYSTEM = (
 )
 
 
+def _analysis_keyboard(ticker: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(label, callback_data=f"analyze_{ticker}_{key}")]
+        for label, key in ANALYSIS_BUTTONS
+    ])
+
+
 async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
         await update.message.reply_text(
-            "請輸入股票代號，例如：\n/analyze 2330\n/analyze TSLA"
+            "請輸入股票代號或公司名稱，例如：\n"
+            "/analyze 2330\n/analyze TSLA\n/analyze Micron"
         )
         return
 
-    ticker = context.args[0].upper().strip()
-    context.user_data["analyze_ticker"] = ticker
+    query = " ".join(context.args).strip()
+    ticker = query.upper()
+
+    if looks_like_ticker(query):
+        context.user_data["analyze_ticker"] = ticker
+        await update.message.reply_text(
+            f"選擇 {ticker} 的分析類型：",
+            reply_markup=_analysis_keyboard(ticker),
+        )
+        return
+
+    # Search by company name
+    await update.message.reply_text(f"搜尋「{query}」中...")
+    results = await asyncio.to_thread(search_ticker, query)
+
+    if not results:
+        await update.message.reply_text(
+            f"找不到「{query}」相關的股票。\n請直接輸入股票代號，例如：/analyze MU"
+        )
+        return
 
     keyboard = [
-        [InlineKeyboardButton(label, callback_data=f"analyze_{key}")]
-        for label, key in ANALYSIS_BUTTONS
+        [InlineKeyboardButton(
+            f"{r['symbol']} — {r['name'][:30]}",
+            callback_data=f"apick_{r['symbol']}",
+        )]
+        for r in results
     ]
     await update.message.reply_text(
-        f"選擇 {ticker} 的分析類型：",
+        f"找到以下結果，請選擇：",
         reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def analyze_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """User picked a ticker from search results."""
+    query = update.callback_query
+    await query.answer()
+
+    ticker = query.data.replace("apick_", "", 1)
+    context.user_data["analyze_ticker"] = ticker
+    await query.edit_message_text(
+        f"選擇 {ticker} 的分析類型：",
+        reply_markup=_analysis_keyboard(ticker),
     )
 
 
@@ -40,23 +83,36 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     await query.answer()
 
-    analysis_key = query.data.replace("analyze_", "")
-    ticker = context.user_data.get("analyze_ticker")
+    # callback_data format: analyze_{ticker}_{key}
+    parts = query.data[len("analyze_"):].rsplit("_", 1)
+    if len(parts) != 2:
+        await query.edit_message_text("❌ 無效的操作，請重新使用 /analyze 指令")
+        return
 
-    if not ticker:
-        await query.edit_message_text("請先使用 /analyze <代號> 指令")
+    ticker, analysis_key = parts
+
+    if analysis_key not in PROMPTS:
+        await query.edit_message_text("❌ 無效的分析類型，請重新使用 /analyze 指令")
         return
 
     label = next((l for l, k in ANALYSIS_BUTTONS if k == analysis_key), analysis_key)
     await query.edit_message_text(f"⏳ 正在分析 {ticker} — {label}，請稍候（約30秒）...")
 
     try:
-        stock_data = await get_stock_summary(ticker)
-        prompt = PROMPTS[analysis_key].format(ticker=ticker)
-        user_msg = f"股票資料：\n{stock_data}\n\n{prompt}"
+        stock_data, financials = await asyncio.gather(
+            get_stock_summary(ticker),
+            get_financials(ticker),
+        )
 
-        # Run blocking LLM call in thread pool to avoid blocking the event loop
-        content = await asyncio.to_thread(call_llm, _SYSTEM, user_msg, ANTHROPIC_ANALYSIS_MODEL)
+        if isinstance(stock_data, dict) and stock_data.get("error"):
+            await query.edit_message_text(f"❌ {stock_data['error']}")
+            return
+
+        financials_text = format_financials_for_prompt(financials)
+        prompt = PROMPTS[analysis_key].format(ticker=ticker)
+        user_msg = f"即時股價資料：\n{stock_data}\n\n{financials_text}\n\n{prompt}"
+
+        content = await asyncio.to_thread(call_llm, _SYSTEM, user_msg)
 
         pdf_bytes = generate_pdf(ticker, label, content)
 
@@ -68,12 +124,13 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.edit_message_text(f"✅ {ticker} {label} 分析完成")
 
     except Exception as exc:
-        logger.error("Analysis failed for %s: %s", ticker, exc)
-        await query.edit_message_text(f"❌ 分析失敗：{exc}")
+        logger.error("Analysis failed for %s/%s: %s", ticker, analysis_key, exc, exc_info=True)
+        await query.edit_message_text(f"❌ 分析失敗，請稍後再試")
 
 
 def build_analyze_handler(auth_filter):
     return [
         CommandHandler("analyze", analyze_command, filters=auth_filter),
+        CallbackQueryHandler(analyze_pick_callback, pattern="^apick_"),
         CallbackQueryHandler(analyze_callback, pattern="^analyze_"),
     ]

@@ -11,6 +11,7 @@ def _require(key: str) -> str:
 
 TELEGRAM_BOT_TOKEN: str = _require("TELEGRAM_BOT_TOKEN")
 ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
 GITHUB_TOKEN: str = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO: str = os.environ.get("GITHUB_REPO", "")
 LLM_PROVIDER: str = os.environ.get("LLM_PROVIDER", "anthropic")

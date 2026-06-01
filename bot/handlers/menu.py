@@ -1,5 +1,5 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, CommandHandler
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [
@@ -16,6 +16,32 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "• /learn ETF — 學習投資知識",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
+
+_HELP_TEXT = """\
+📋 所有可用指令
+
+股票分析
+/analyze 2330 — 台股/美股深度分析（7 種類型）
+/earnings TSLA — 財報速覽：近 4 季 EPS beat/miss + LLM 分析
+
+新聞晨報
+/watch 2330 — 加入追蹤清單
+/unwatch 2330 — 移除追蹤
+/watch — 查看目前追蹤清單
+/news — 立即查看追蹤股票新聞（每天早上 8 點也會自動推送）
+
+學習與教練
+/learn ETF — 學習投資知識
+/finance — 個人理財教練（對話式）
+
+設定
+/model — 切換 AI 模型
+/help — 顯示此說明
+"""
+
+async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(_HELP_TEXT)
+
 
 async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
