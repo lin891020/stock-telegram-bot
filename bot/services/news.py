@@ -56,20 +56,19 @@ def _fetch_news(ticker: str) -> list[dict]:
         return []
 
 
-def _build_news_block(tickers: list[str]) -> tuple[str, dict]:
-    """Returns (headlines_block_for_llm, sources_dict {ticker: [url]})."""
+def _build_news_data(tickers: list[str]) -> tuple[str, dict]:
+    """Returns (headlines_block_for_llm, news_items_dict {ticker: [{title, url}]})."""
     blocks = []
-    sources = {}
+    news_items = {}
     for ticker in tickers:
         items = _fetch_news(ticker)
-        urls = [i["url"] for i in items if i.get("url")]
-        sources[ticker] = urls
+        news_items[ticker] = items
         if not items:
             blocks.append(f"=== {ticker} ===\n（無新聞）")
         else:
             lines = "\n".join(f"- {i['title']}" for i in items)
             blocks.append(f"=== {ticker} ===\n{lines}")
-    return "\n\n".join(blocks), sources
+    return "\n\n".join(blocks), news_items
 
 
 def _parse_llm_sections(text: str, tickers: list[str]) -> dict[str, str]:
@@ -87,17 +86,16 @@ def _parse_llm_sections(text: str, tickers: list[str]) -> dict[str, str]:
 
 
 def _display_name(ticker: str, data_name: str) -> str:
-    """Return Chinese name for TW stocks, English for US."""
     if is_taiwan_stock(ticker):
         return get_tw_name(ticker) or data_name or ticker
     return data_name or ticker
 
 
 async def fetch_and_summarize(tickers: list[str]) -> str:
-    news_result_task = asyncio.to_thread(_build_news_block, tickers)
+    news_data_task = asyncio.to_thread(_build_news_data, tickers)
     price_tasks = [get_stock_summary(t) for t in tickers]
 
-    (news_block, sources), *price_results = await asyncio.gather(news_result_task, *price_tasks)
+    (news_block, news_items), *price_results = await asyncio.gather(news_data_task, *price_tasks)
     prices = {t: data for t, data in zip(tickers, price_results)}
 
     today = date.today().strftime("%Y/%m/%d")
@@ -112,6 +110,8 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
 - 每支股票以 [代號] 開頭（例如 [2408]、[MU]）
 - 純文字，不要使用 # ## ** 等符號
 - 影響方向用：▲ 正面 / ▼ 負面 / ● 中性
+- 只分析該股票本身，不要提及其他公司名稱
+- 若新聞內容與該股票無直接關聯，輸出「（本日無直接相關新聞）」
 
 {news_block}"""
 
@@ -132,10 +132,13 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
             block += f"\n\n{price_line}"
         block += f"\n\n{analysis}"
 
-        urls = sources.get(t, [])
-        if urls:
-            source_lines = "\n".join(urls[:3])
-            block += f"\n\nSource:\n{source_lines}"
+        items_with_url = [i for i in news_items.get(t, []) if i.get("url")]
+        if items_with_url:
+            titles = "\n".join(
+                f"• {i['title'][:55]}{'…' if len(i['title']) > 55 else ''}"
+                for i in items_with_url[:3]
+            )
+            block += f"\n\nSource:\n{titles}"
 
         output_parts.append(block)
 
