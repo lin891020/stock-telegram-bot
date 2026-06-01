@@ -41,7 +41,7 @@ def _fetch_earnings_sync(ticker: str) -> dict:
         elif isinstance(cal, pd.DataFrame) and not cal.empty:
             if "Earnings Date" in cal.index:
                 val = cal.loc["Earnings Date"].iloc[0]
-                next_date = str(val)[:1
+                next_date = str(val)[:10]
     except Exception:
         pass
 
