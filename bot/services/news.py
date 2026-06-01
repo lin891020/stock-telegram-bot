@@ -6,6 +6,7 @@ import yfinance as yf
 
 from bot.services.llm import call_llm
 from bot.services.stock import is_taiwan_stock, get_stock_summary
+from bot.services.tw_stocks import get_tw_name
 
 logger = logging.getLogger(__name__)
 
@@ -28,44 +29,53 @@ def _format_price(stock_data: dict) -> str:
     return f"收 {price:.2f} {currency}"
 
 
-def _fetch_news(ticker: str) -> list[str]:
+def _fetch_news(ticker: str) -> list[dict]:
+    """Return up to 5 news items as [{title, url}]."""
     yf_ticker = f"{ticker}.TW" if is_taiwan_stock(ticker) else ticker
     try:
         stock = yf.Ticker(yf_ticker)
         raw = stock.news or []
-        headlines = []
+        items = []
         for item in raw[:5]:
             content = item.get("content", {})
             if isinstance(content, dict):
                 title = content.get("title") or item.get("title", "")
+                url = (
+                    (content.get("canonicalUrl") or {}).get("url")
+                    or (content.get("clickThroughUrl") or {}).get("url")
+                    or item.get("link", "")
+                )
             else:
                 title = item.get("title", "")
+                url = item.get("link", "")
             if title:
-                headlines.append(title)
-        return headlines
+                items.append({"title": title, "url": url})
+        return items
     except Exception as e:
         logger.warning("News fetch failed for %s: %s", ticker, e)
         return []
 
 
-def _build_news_block(tickers: list[str]) -> str:
+def _build_news_block(tickers: list[str]) -> tuple[str, dict]:
+    """Returns (headlines_block_for_llm, sources_dict {ticker: [url]})."""
     blocks = []
+    sources = {}
     for ticker in tickers:
-        headlines = _fetch_news(ticker)
-        if not headlines:
+        items = _fetch_news(ticker)
+        urls = [i["url"] for i in items if i.get("url")]
+        sources[ticker] = urls
+        if not items:
             blocks.append(f"=== {ticker} ===\n（無新聞）")
         else:
-            lines = "\n".join(f"- {h}" for h in headlines)
+            lines = "\n".join(f"- {i['title']}" for i in items)
             blocks.append(f"=== {ticker} ===\n{lines}")
-    return "\n\n".join(blocks)
+    return "\n\n".join(blocks), sources
 
 
 def _parse_llm_sections(text: str, tickers: list[str]) -> dict[str, str]:
-    """Parse LLM output into {ticker: analysis} by [TICKER] markers."""
-    result = {}
     pattern = re.compile(r"\[([A-Z0-9]+)\]", re.IGNORECASE)
     parts = pattern.split(text)
-    # parts = [preamble, ticker1, body1, ticker2, body2, ...]
+    result = {}
     i = 1
     while i + 1 < len(parts):
         t = parts[i].upper().strip()
@@ -76,16 +86,22 @@ def _parse_llm_sections(text: str, tickers: list[str]) -> dict[str, str]:
     return result
 
 
+def _display_name(ticker: str, data_name: str) -> str:
+    """Return Chinese name for TW stocks, English for US."""
+    if is_taiwan_stock(ticker):
+        return get_tw_name(ticker) or data_name or ticker
+    return data_name or ticker
+
+
 async def fetch_and_summarize(tickers: list[str]) -> str:
-    news_block_task = asyncio.to_thread(_build_news_block, tickers)
+    news_result_task = asyncio.to_thread(_build_news_block, tickers)
     price_tasks = [get_stock_summary(t) for t in tickers]
 
-    news_block, *price_results = await asyncio.gather(news_block_task, *price_tasks)
+    (news_block, sources), *price_results = await asyncio.gather(news_result_task, *price_tasks)
     prices = {t: data for t, data in zip(tickers, price_results)}
 
     today = date.today().strftime("%Y/%m/%d")
 
-    # LLM only writes analysis — no prices
     system = "你是一位專業股票研究員。根據提供的新聞標題，為每支股票寫簡短分析。用繁體中文，語氣簡潔專業。"
     user = f"""今天日期：{today}
 
@@ -102,11 +118,11 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
     llm_output = await asyncio.to_thread(call_llm, system, user)
     sections = _parse_llm_sections(llm_output, tickers)
 
-    # Assemble final output: Python formats price, LLM provides analysis
     output_parts = []
     for t in tickers:
         data = prices.get(t, {})
-        name = data.get("name", "") if isinstance(data, dict) else ""
+        data_name = data.get("name", "") if isinstance(data, dict) else ""
+        name = _display_name(t, data_name)
         label = f"{name}({t})" if name and name != t else t
         price_line = _format_price(data) if isinstance(data, dict) and not data.get("error") else ""
         analysis = sections.get(t.upper(), "（無資料）")
@@ -115,8 +131,14 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
         if price_line:
             block += f"\n\n{price_line}"
         block += f"\n\n{analysis}"
+
+        urls = sources.get(t, [])
+        if urls:
+            source_lines = "\n".join(urls[:3])
+            block += f"\n\nSource:\n{source_lines}"
+
         output_parts.append(block)
 
-    header = f"晨報 {today}" if len(tickers) > 1 else ""
+    header = f"晨報 {today}"
     body = "\n\n---\n\n".join(output_parts)
-    return f"{header}\n\n{body}" if header else body
+    return f"{header}\n\n{body}"
