@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import datetime
 from telegram import BotCommand
@@ -12,6 +13,7 @@ from bot.handlers.finance import build_finance_handler
 from bot.handlers.model import build_model_handler
 from bot.handlers.watch import build_watch_handler, send_daily_news, send_tw_closing, send_us_closing
 from bot.handlers.price import build_price_handler
+from bot.services.tw_stocks import load_tw_stock_list
 from bot.handlers.earnings import build_earnings_handler
 
 logging.basicConfig(
@@ -20,6 +22,7 @@ logging.basicConfig(
 )
 
 async def _post_init(application) -> None:
+    await asyncio.to_thread(load_tw_stock_list)
     await application.bot.set_my_commands([
         BotCommand("start",     "開始使用 / 主選單"),
         BotCommand("analyze",   "📊 深度股票分析報告"),

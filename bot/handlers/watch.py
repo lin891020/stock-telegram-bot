@@ -4,9 +4,12 @@ from datetime import date
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
+import yfinance as yf
+
 from bot.services.watchlist import get_watchlist_with_names, get_watchlist, add_ticker, remove_ticker, _load
 from bot.services.news import fetch_and_summarize
 from bot.services.stock import looks_like_ticker, search_ticker, get_stock_summary, is_taiwan_stock
+from bot.services.tw_stocks import get_tw_name, has_chinese, search_tw_stocks
 
 logger = logging.getLogger(__name__)
 
@@ -58,14 +61,31 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if looks_like_ticker(query_text):
         ticker = query_text.upper()
-        if add_ticker(user_id, ticker):
-            await update.message.reply_text(f"✅ 已加入追蹤：{ticker}\n\n每天早上 8 點會自動推送晨報")
+        # Resolve company name at watch time
+        name = ticker
+        if is_taiwan_stock(ticker):
+            name = get_tw_name(ticker) or ticker
         else:
-            await update.message.reply_text(f"「{ticker}」已在追蹤清單中")
+            try:
+                info = await asyncio.to_thread(lambda: yf.Ticker(ticker).info)
+                name = info.get("shortName") or info.get("longName") or ticker
+            except Exception:
+                pass
+        if add_ticker(user_id, ticker, name):
+            label = _label(ticker, name)
+            await update.message.reply_text(f"✅ 已加入追蹤：{label}\n\n每天早上 8 點會自動推送晨報")
+        else:
+            await update.message.reply_text(f"「{_label(ticker, name)}」已在追蹤清單中")
         return
 
     await update.message.reply_text(f"搜尋「{query_text}」中...")
-    results = await asyncio.to_thread(search_ticker, query_text)
+
+    # Chinese query → search TW stock cache; otherwise use yfinance
+    if has_chinese(query_text):
+        results = search_tw_stocks(query_text, max_results=5)
+    else:
+        results = await asyncio.to_thread(search_ticker, query_text)
+        results = results[:5]
 
     if not results:
         await update.message.reply_text(f"找不到「{query_text}」，請直接輸入股票代號，例如：/watch 2408")
@@ -82,7 +102,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     keyboard = [
         [InlineKeyboardButton(
-            f"{r['symbol']} — {r['name'][:30]}",
+            f"{r['name']}({r['symbol']})",
             callback_data=f"wadd_{r['symbol']}_{r['name'][:20]}",
         )]
         for r in results
