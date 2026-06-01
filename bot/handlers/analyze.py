@@ -97,7 +97,7 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     label = next((l for l, k in ANALYSIS_BUTTONS if k == analysis_key), analysis_key)
-    await query.edit_message_text(f"⏳ 正在分析 {ticker} — {label}，請稍候（約30秒）...")
+    await query.edit_message_text(f"⏳ 正在抓取 {ticker} 股價與財務數據...")
 
     try:
         stock_data, financials = await asyncio.gather(
@@ -108,6 +108,8 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if isinstance(stock_data, dict) and stock_data.get("error"):
             await query.edit_message_text(f"❌ {stock_data['error']}")
             return
+
+        await query.edit_message_text(f"⏳ AI 正在生成 {ticker} — {label} 報告，請稍候...")
 
         financials_text = format_financials_for_prompt(financials)
         prompt = PROMPTS[analysis_key].format(ticker=ticker)

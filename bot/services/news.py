@@ -79,7 +79,9 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
             continue
         line = _format_price(data)
         if line:
-            price_lines.append(f"{t}: {line}")
+            name = data.get("name", "")
+            label = f"{name}({t})" if name and name != t else t
+            price_lines.append(f"{label}: {line}")
     price_block = "\n".join(price_lines)
 
     system = "你是一位專業股票研究員，每天早上為投資人撰寫追蹤股票晨報。用繁體中文，語氣簡潔專業。"

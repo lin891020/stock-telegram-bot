@@ -112,8 +112,16 @@ async def fetch_taiwan_data(ticker: str) -> dict:
     prev_close_raw = prev[6].replace(",", "") if prev and len(prev) > 6 else "N/A"
     volume = latest[1].replace(",", "") if len(latest) > 1 else "N/A"
 
+    name = ticker
+    try:
+        info = yf.Ticker(f"{ticker}.TW").info
+        name = info.get("shortName") or info.get("longName") or ticker
+    except Exception:
+        pass
+
     return {
         "ticker": ticker,
+        "name": name,
         "date": _roc_to_ad(latest[0]),
         "close": float(close) if close != "N/A" else None,
         "prev_close": float(prev_close_raw) if prev_close_raw != "N/A" else None,

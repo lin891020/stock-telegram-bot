@@ -10,7 +10,8 @@ from bot.handlers.analyze import build_analyze_handler
 from bot.handlers.learn import build_learn_handler
 from bot.handlers.finance import build_finance_handler
 from bot.handlers.model import build_model_handler
-from bot.handlers.watch import build_watch_handler, send_daily_news
+from bot.handlers.watch import build_watch_handler, send_daily_news, send_tw_closing, send_us_closing
+from bot.handlers.price import build_price_handler
 from bot.handlers.earnings import build_earnings_handler
 
 logging.basicConfig(
@@ -23,9 +24,10 @@ async def _post_init(application) -> None:
         BotCommand("start",     "開始使用 / 主選單"),
         BotCommand("analyze",   "📊 深度股票分析報告"),
         BotCommand("earnings",  "📋 財報 EPS 速覽"),
+        BotCommand("price",     "💹 快速查看股價"),
         BotCommand("watch",     "👀 新增自選股追蹤"),
-        BotCommand("unwatch",   "🗑 移除自選股"),
-        BotCommand("watchlist", "📌 查看我的自選股"),
+        BotCommand("watchlist", "📌 查看自選股（點 ❌ 移除）"),
+        BotCommand("news",      "📰 立即查看追蹤股票新聞"),
         BotCommand("learn",     "📚 學習投資觀念"),
         BotCommand("finance",   "💰 個人財務教練"),
         BotCommand("model",     "🤖 切換 AI 模型"),
@@ -50,16 +52,28 @@ def main() -> None:
     for handler in build_model_handler(auth):
         app.add_handler(handler)
 
+    app.add_handler(build_price_handler(auth))
+
     for handler in build_watch_handler(auth):
         app.add_handler(handler)
 
     for handler in build_earnings_handler(auth):
         app.add_handler(handler)
 
-    # Daily news digest at 08:00 Taipei time (UTC+8 → 00:00 UTC)
+    # 晨報 08:00 Taipei = 00:00 UTC
     app.job_queue.run_daily(
         send_daily_news,
         time=datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc),
+    )
+    # 台股收盤速報 14:00 Taipei = 06:00 UTC
+    app.job_queue.run_daily(
+        send_tw_closing,
+        time=datetime.time(hour=6, minute=0, tzinfo=datetime.timezone.utc),
+    )
+    # 美股收盤速報 06:00 Taipei = 22:00 UTC (前一天)
+    app.job_queue.run_daily(
+        send_us_closing,
+        time=datetime.time(hour=22, minute=0, tzinfo=datetime.timezone.utc),
     )
 
     logging.getLogger(__name__).info("Bot started, polling...")
