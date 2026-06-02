@@ -4,6 +4,15 @@ import httpx
 import yfinance as yf
 from datetime import date, timedelta
 
+_CORP_SUFFIX = re.compile(
+    r",?\s*(Inc\.?|Corp\.?|Corporation|Ltd\.?|LLC|Co\.?|Holdings?|Group|PLC|S\.A\.?|N\.V\.?)\.?\s*$",
+    re.IGNORECASE,
+)
+
+def clean_us_name(name: str) -> str:
+    """Strip corporate suffixes: 'NVIDIA Corporation' → 'NVIDIA'."""
+    return _CORP_SUFFIX.sub("", name).strip()
+
 TWSE_URL = "https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY"
 _MONTHS_TO_FETCH = 3
 _MAX_RETRIES = 3
@@ -46,9 +55,10 @@ def fetch_us_data(ticker: str) -> dict:
     if not info or info.get("trailingPegRatio") is None and info.get("currentPrice") is None and info.get("regularMarketPrice") is None and info.get("longName") is None:
         return {"ticker": ticker, "error": f"查無股票代號 {ticker}，請確認 ticker 是否正確（例如 Micron → MU）", "market": "US"}
 
+    raw_name = info.get("shortName") or info.get("longName") or ticker
     return {
         "ticker": ticker,
-        "name": info.get("longName", ticker),
+        "name": clean_us_name(raw_name),
         "price": info.get("currentPrice") or info.get("regularMarketPrice"),
         "prev_close": info.get("previousClose") or info.get("regularMarketPreviousClose"),
         "currency": info.get("currency", "USD"),
@@ -112,12 +122,8 @@ async def fetch_taiwan_data(ticker: str) -> dict:
     prev_close_raw = prev[6].replace(",", "") if prev and len(prev) > 6 else "N/A"
     volume = latest[1].replace(",", "") if len(latest) > 1 else "N/A"
 
-    name = ticker
-    try:
-        info = yf.Ticker(f"{ticker}.TW").info
-        name = info.get("shortName") or info.get("longName") or ticker
-    except Exception:
-        pass
+    from bot.services.tw_stocks import get_tw_name
+    name = get_tw_name(ticker) or ticker
 
     return {
         "ticker": ticker,

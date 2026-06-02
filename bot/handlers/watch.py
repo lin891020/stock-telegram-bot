@@ -8,7 +8,7 @@ import yfinance as yf
 
 from bot.services.watchlist import get_watchlist_with_names, get_watchlist, add_ticker, remove_ticker, _load
 from bot.services.news import fetch_and_summarize
-from bot.services.stock import looks_like_ticker, search_ticker, get_stock_summary, is_taiwan_stock
+from bot.services.stock import looks_like_ticker, search_ticker, get_stock_summary, is_taiwan_stock, clean_us_name
 from bot.services.tw_stocks import get_tw_name, has_chinese, search_tw_stocks
 
 logger = logging.getLogger(__name__)
@@ -61,16 +61,34 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if looks_like_ticker(query_text):
         ticker = query_text.upper()
-        # Resolve company name at watch time
         name = ticker
+
         if is_taiwan_stock(ticker):
-            name = get_tw_name(ticker) or ticker
+            tw_name = get_tw_name(ticker)
+            if tw_name is None:
+                # Validate by fetching — cache might not cover all stocks
+                test = await get_stock_summary(ticker)
+                if test.get("error"):
+                    await update.message.reply_text(
+                        f"找不到台股代號「{ticker}」，請確認是否正確"
+                    )
+                    return
+            name = tw_name or ticker
         else:
             try:
                 info = await asyncio.to_thread(lambda: yf.Ticker(ticker).info)
-                name = info.get("shortName") or info.get("longName") or ticker
+                price = info.get("currentPrice") or info.get("regularMarketPrice")
+                raw_name = info.get("shortName") or info.get("longName")
+                if not price and not raw_name:
+                    await update.message.reply_text(
+                        f"找不到「{ticker}」，請確認代號是否正確\n"
+                        f"或用名稱搜尋，例如：/watch Tesla"
+                    )
+                    return
+                name = clean_us_name(raw_name) if raw_name else ticker
             except Exception:
                 pass
+
         if add_ticker(user_id, ticker, name):
             label = _label(ticker, name)
             await update.message.reply_text(f"✅ 已加入追蹤：{label}\n\n每天早上 8 點會自動推送晨報")
@@ -91,10 +109,15 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text(f"找不到「{query_text}」，請直接輸入股票代號，例如：/watch 2408")
         return
 
+    def _resolved_name(r: dict) -> str:
+        name = r["name"]
+        return name if is_taiwan_stock(r["symbol"]) else clean_us_name(name)
+
     if len(results) == 1:
         r = results[0]
-        if add_ticker(user_id, r["symbol"], r["name"]):
-            label = _label(r["symbol"], r["name"])
+        name = _resolved_name(r)
+        if add_ticker(user_id, r["symbol"], name):
+            label = _label(r["symbol"], name)
             await update.message.reply_text(f"✅ 已加入追蹤：{label}\n\n每天早上 8 點會自動推送晨報")
         else:
             await update.message.reply_text(f"「{r['symbol']}」已在追蹤清單中")
@@ -102,8 +125,8 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     keyboard = [
         [InlineKeyboardButton(
-            f"{r['name']}({r['symbol']})",
-            callback_data=f"wadd_{r['symbol']}_{r['name'][:20]}",
+            f"{_resolved_name(r)}({r['symbol']})",
+            callback_data=f"wadd_{r['symbol']}_{_resolved_name(r)[:20]}",
         )]
         for r in results
     ]
@@ -116,7 +139,8 @@ async def watch_add_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     parts = query.data[len("wadd_"):].split("_", 1)
     ticker = parts[0]
-    name = parts[1] if len(parts) > 1 else ticker
+    raw_name = parts[1] if len(parts) > 1 else ticker
+    name = raw_name if is_taiwan_stock(ticker) else clean_us_name(raw_name)
 
     user_id = query.from_user.id
     if add_ticker(user_id, ticker, name):
@@ -146,14 +170,29 @@ async def unwatch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = update.effective_user.id
 
     if not context.args:
-        await update.message.reply_text("請輸入要移除的代號，例如：/unwatch 2330")
+        await update.message.reply_text("請輸入要移除的代號或名稱，例如：/unwatch TSLA 或 /unwatch Tesla")
         return
 
-    ticker = context.args[0].strip().upper()
-    if remove_ticker(user_id, ticker):
-        await update.message.reply_text(f"✅ 已移除追蹤：{ticker}")
-    else:
-        await update.message.reply_text(f"「{ticker}」不在追蹤清單中")
+    query_text = " ".join(context.args).strip()
+    ticker = query_text.upper()
+
+    # Try exact ticker match first
+    if not remove_ticker(user_id, ticker):
+        # Fall back to name match
+        items = get_watchlist_with_names(user_id)
+        match = next(
+            (i for i in items if i["name"].upper() == query_text.upper()),
+            None
+        )
+        if match:
+            remove_ticker(user_id, match["ticker"])
+            label = _label(match["ticker"], match["name"])
+            await update.message.reply_text(f"✅ 已移除追蹤：{label}")
+        else:
+            await update.message.reply_text(f"「{query_text}」不在追蹤清單中")
+        return
+
+    await update.message.reply_text(f"✅ 已移除追蹤：{ticker}")
 
 
 async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

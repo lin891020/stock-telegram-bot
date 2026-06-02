@@ -7,8 +7,6 @@ import yfinance as yf
 
 from bot.services.llm import call_llm
 from bot.services.stock import is_taiwan_stock, get_stock_summary
-from bot.services.tw_stocks import get_tw_name
-
 logger = logging.getLogger(__name__)
 
 
@@ -86,12 +84,6 @@ def _parse_llm_sections(text: str, tickers: list[str]) -> dict[str, str]:
     return result
 
 
-def _display_name(ticker: str, data_name: str) -> str:
-    if is_taiwan_stock(ticker):
-        return get_tw_name(ticker) or data_name or ticker
-    return data_name or ticker
-
-
 async def fetch_and_summarize(tickers: list[str]) -> str:
     news_data_task = asyncio.to_thread(_build_news_data, tickers)
     price_tasks = [get_stock_summary(t) for t in tickers]
@@ -122,8 +114,7 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
     output_parts = []
     for t in tickers:
         data = prices.get(t, {})
-        data_name = data.get("name", "") if isinstance(data, dict) else ""
-        name = _display_name(t, data_name)
+        name = data.get("name", "") if isinstance(data, dict) else ""
         label = f"{name}({t})" if name and name != t else t
         price_line = _format_price(data) if isinstance(data, dict) and not data.get("error") else ""
         analysis = sections.get(t.upper(), "（無資料）")
