@@ -80,10 +80,30 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 price = info.get("currentPrice") or info.get("regularMarketPrice")
                 raw_name = info.get("shortName") or info.get("longName")
                 if not price and not raw_name:
-                    await update.message.reply_text(
-                        f"找不到「{ticker}」，請確認代號是否正確\n"
-                        f"或用名稱搜尋，例如：/watch Tesla"
-                    )
+                    # Ticker not found — fall through to name search
+                    results = await asyncio.to_thread(search_ticker, query_text)
+                    results = results[:5]
+                    if not results:
+                        await update.message.reply_text(
+                            f"找不到「{query_text}」，請確認股票代號或名稱是否正確"
+                        )
+                        return
+                    if len(results) == 1:
+                        r = results[0]
+                        clean = clean_us_name(r["name"])
+                        if add_ticker(user_id, r["symbol"], clean):
+                            await update.message.reply_text(f"✅ 已加入追蹤：{_label(r['symbol'], clean)}\n\n每天早上 8 點會自動推送晨報")
+                        else:
+                            await update.message.reply_text(f"「{r['symbol']}」已在追蹤清單中")
+                        return
+                    keyboard = [
+                        [InlineKeyboardButton(
+                            f"{clean_us_name(r['name'])}({r['symbol']})",
+                            callback_data=f"wadd_{r['symbol']}_{clean_us_name(r['name'])[:20]}",
+                        )]
+                        for r in results
+                    ]
+                    await update.message.reply_text("找到以下結果，請選擇：", reply_markup=InlineKeyboardMarkup(keyboard))
                     return
                 name = clean_us_name(raw_name) if raw_name else ticker
             except Exception:
