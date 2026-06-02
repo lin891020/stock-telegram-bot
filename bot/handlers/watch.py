@@ -277,12 +277,42 @@ async def send_us_closing(context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_closing_digest(context, "US")
 
 
+async def testclosing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manually trigger closing digest for testing. Usage: /testclosing tw | us"""
+    market = (context.args[0].upper() if context.args else "TW")
+    if market not in ("TW", "US"):
+        await update.message.reply_text("用法：/testclosing tw 或 /testclosing us")
+        return
+
+    user_id = update.effective_user.id
+    tickers = get_watchlist(user_id)
+    filtered = [t for t in tickers if is_taiwan_stock(t) == (market == "TW")]
+
+    if not filtered:
+        await update.message.reply_text(f"自選股裡沒有{'台股' if market == 'TW' else '美股'}")
+        return
+
+    today = date.today().strftime("%Y/%m/%d")
+    title = "📊 台股收盤速報" if market == "TW" else "📊 美股收盤速報"
+    results = await asyncio.gather(*[get_stock_summary(t) for t in filtered])
+    lines = []
+    for t, data in zip(filtered, results):
+        if isinstance(data, dict) and not data.get("error"):
+            lines.append(_format_closing_line(t, data))
+
+    if lines:
+        await update.message.reply_text(f"{title} {today}\n\n" + "\n".join(lines))
+    else:
+        await update.message.reply_text("無法取得報價資料")
+
+
 def build_watch_handler(auth_filter):
     return [
         CommandHandler("watch", watch_command, filters=auth_filter),
         CommandHandler("unwatch", unwatch_command, filters=auth_filter),
         CommandHandler("watchlist", watchlist_command, filters=auth_filter),
         CommandHandler("news", news_command, filters=auth_filter),
+        CommandHandler("testclosing", testclosing_command, filters=auth_filter),
         CallbackQueryHandler(watch_add_callback, pattern="^wadd_"),
         CallbackQueryHandler(watch_delete_callback, pattern="^wdel_"),
     ]
