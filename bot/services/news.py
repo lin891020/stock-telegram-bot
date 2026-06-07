@@ -2,7 +2,8 @@ import asyncio
 import html
 import logging
 import re
-from datetime import date
+import time
+from datetime import date, datetime, timezone
 import yfinance as yf
 
 from bot.services.llm import call_llm
@@ -28,14 +29,37 @@ def _format_price(stock_data: dict) -> str:
     return f"收 {price:.2f} {currency}"
 
 
+_48H = 48 * 3600
+
+
+def _is_fresh(item: dict) -> bool:
+    """Return True if the news article was published within the last 48 hours."""
+    content = item.get("content", {})
+    # Try ISO pubDate from content dict first
+    pub_date_str = content.get("pubDate") if isinstance(content, dict) else None
+    if pub_date_str:
+        try:
+            pub_dt = datetime.fromisoformat(pub_date_str.replace("Z", "+00:00"))
+            return (datetime.now(timezone.utc) - pub_dt).total_seconds() < _48H
+        except ValueError:
+            pass
+    # Fall back to Unix timestamp at top level
+    pts = item.get("providerPublishTime")
+    if pts:
+        return (time.time() - float(pts)) < _48H
+    return True  # unknown age → keep
+
+
 def _fetch_news(ticker: str) -> list[dict]:
-    """Return up to 5 news items as [{title, url}]."""
+    """Return up to 5 fresh (< 48 h) news items as [{title, url}]."""
     yf_ticker = f"{ticker}.TW" if is_taiwan_stock(ticker) else ticker
     try:
         stock = yf.Ticker(yf_ticker)
         raw = stock.news or []
         items = []
-        for item in raw[:5]:
+        for item in raw:
+            if not _is_fresh(item):
+                continue
             content = item.get("content", {})
             if isinstance(content, dict):
                 title = content.get("title") or item.get("title", "")
@@ -49,6 +73,8 @@ def _fetch_news(ticker: str) -> list[dict]:
                 url = item.get("link", "")
             if title:
                 items.append({"title": title, "url": url})
+            if len(items) >= 5:
+                break
         return items
     except Exception as e:
         logger.warning("News fetch failed for %s: %s", ticker, e)

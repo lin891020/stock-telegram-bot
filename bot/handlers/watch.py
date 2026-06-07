@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import date
+from datetime import date, datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
@@ -248,6 +248,8 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def send_daily_news(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if datetime.utcnow().weekday() >= 5:  # 5=Sat, 6=Sun
+        return
     all_data = _load()
     for user_id_str, raw in all_data.items():
         tickers = list(raw.keys()) if isinstance(raw, dict) else raw
@@ -265,6 +267,8 @@ async def send_daily_news(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def send_closing_digest(context: ContextTypes.DEFAULT_TYPE, market: str) -> None:
+    if datetime.utcnow().weekday() >= 5:  # 5=Sat, 6=Sun — markets closed
+        return
     today = date.today().strftime("%Y/%m/%d")
     title = "📊 台股收盤速報" if market == "TW" else "📊 美股收盤速報"
     all_data = _load()
@@ -278,8 +282,15 @@ async def send_closing_digest(context: ContextTypes.DEFAULT_TYPE, market: str) -
             results = await asyncio.gather(*[get_stock_summary(t) for t in filtered])
             lines = []
             for t, data in zip(filtered, results):
-                if isinstance(data, dict) and not data.get("error"):
-                    lines.append(_format_closing_line(t, data))
+                if not isinstance(data, dict) or data.get("error"):
+                    continue
+                # For TW stocks, skip if data date doesn't match today (holiday)
+                if market == "TW":
+                    data_date = (data.get("date") or "")[:10]
+                    today_iso = date.today().strftime("%Y/%m/%d")
+                    if data_date and data_date.replace("-", "/") != today_iso:
+                        continue
+                lines.append(_format_closing_line(t, data))
             if lines:
                 await context.bot.send_message(
                     chat_id=int(user_id_str),
