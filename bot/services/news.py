@@ -97,7 +97,8 @@ def _build_news_data(tickers: list[str]) -> tuple[str, dict]:
 
 
 def _parse_llm_sections(text: str, tickers: list[str]) -> dict[str, str]:
-    pattern = re.compile(r"\[([A-Z0-9]+)\]", re.IGNORECASE)
+    # Allow dots for tickers like BRK.B
+    pattern = re.compile(r"\[([A-Z0-9.]+)\]", re.IGNORECASE)
     parts = pattern.split(text)
     result = {}
     i = 1

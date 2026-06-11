@@ -1,23 +1,40 @@
 import asyncio
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 import yfinance as yf
 
+from bot.auth import restrict_callback
 from bot.services.watchlist import get_watchlist_with_names, get_watchlist, add_ticker, remove_ticker, _load
 from bot.services.news import fetch_and_summarize
+from bot.services.settings import get_news_time, set_news_time, parse_hhmm
 from bot.services.stock import looks_like_ticker, search_ticker, get_stock_summary, is_taiwan_stock, clean_us_name
 from bot.services.tw_stocks import get_tw_name, has_chinese, search_tw_stocks
 
 logger = logging.getLogger(__name__)
+
+_NEWS_JOB_NAME = "daily_news"
+_TAIPEI_UTC_OFFSET = 8  # Taipei has no DST
 
 
 def _label(ticker: str, name: str) -> str:
     if name and name != ticker:
         return f"{name}({ticker})"
     return ticker
+
+
+def _added_message(label: str) -> str:
+    return f"✅ 已加入追蹤：{label}\n\n每天 {get_news_time()} 會自動推送晨報（/settime 可修改時間）"
+
+
+def _wadd_callback_data(symbol: str, name: str) -> str:
+    """Build wadd_ callback data within Telegram's 64-byte limit."""
+    prefix = f"wadd_{symbol}_"
+    budget = 64 - len(prefix.encode("utf-8"))
+    truncated = name.encode("utf-8")[:budget].decode("utf-8", errors="ignore")
+    return prefix + truncated
 
 
 def _build_watchlist_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
@@ -92,14 +109,14 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         r = results[0]
                         clean = clean_us_name(r["name"])
                         if add_ticker(user_id, r["symbol"], clean):
-                            await update.message.reply_text(f"✅ 已加入追蹤：{_label(r['symbol'], clean)}\n\n每天早上 8 點會自動推送晨報")
+                            await update.message.reply_text(_added_message(_label(r["symbol"], clean)))
                         else:
                             await update.message.reply_text(f"「{r['symbol']}」已在追蹤清單中")
                         return
                     keyboard = [
                         [InlineKeyboardButton(
                             f"{clean_us_name(r['name'])}({r['symbol']})",
-                            callback_data=f"wadd_{r['symbol']}_{clean_us_name(r['name'])[:20]}",
+                            callback_data=_wadd_callback_data(r["symbol"], clean_us_name(r["name"])),
                         )]
                         for r in results
                     ]
@@ -110,8 +127,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 pass
 
         if add_ticker(user_id, ticker, name):
-            label = _label(ticker, name)
-            await update.message.reply_text(f"✅ 已加入追蹤：{label}\n\n每天早上 8 點會自動推送晨報")
+            await update.message.reply_text(_added_message(_label(ticker, name)))
         else:
             await update.message.reply_text(f"「{_label(ticker, name)}」已在追蹤清單中")
         return
@@ -137,8 +153,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         r = results[0]
         name = _resolved_name(r)
         if add_ticker(user_id, r["symbol"], name):
-            label = _label(r["symbol"], name)
-            await update.message.reply_text(f"✅ 已加入追蹤：{label}\n\n每天早上 8 點會自動推送晨報")
+            await update.message.reply_text(_added_message(_label(r["symbol"], name)))
         else:
             await update.message.reply_text(f"「{r['symbol']}」已在追蹤清單中")
         return
@@ -146,13 +161,14 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     keyboard = [
         [InlineKeyboardButton(
             f"{_resolved_name(r)}({r['symbol']})",
-            callback_data=f"wadd_{r['symbol']}_{_resolved_name(r)[:20]}",
+            callback_data=_wadd_callback_data(r["symbol"], _resolved_name(r)),
         )]
         for r in results
     ]
     await update.message.reply_text("找到以下結果，請選擇：", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
+@restrict_callback
 async def watch_add_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -164,12 +180,12 @@ async def watch_add_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     user_id = query.from_user.id
     if add_ticker(user_id, ticker, name):
-        label = _label(ticker, name)
-        await query.edit_message_text(f"✅ 已加入追蹤：{label}\n\n每天早上 8 點會自動推送晨報")
+        await query.edit_message_text(_added_message(_label(ticker, name)))
     else:
         await query.edit_message_text(f"「{ticker}」已在追蹤清單中")
 
 
+@restrict_callback
 async def watch_delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -248,7 +264,8 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def send_daily_news(context: ContextTypes.DEFAULT_TYPE) -> None:
-    if datetime.utcnow().weekday() >= 5:  # 5=Sat, 6=Sun
+    taipei_now = datetime.now(timezone.utc) + timedelta(hours=_TAIPEI_UTC_OFFSET)
+    if taipei_now.weekday() >= 5:  # 5=Sat, 6=Sun
         return
     all_data = _load()
     for user_id_str, raw in all_data.items():
@@ -267,7 +284,7 @@ async def send_daily_news(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def send_closing_digest(context: ContextTypes.DEFAULT_TYPE, market: str) -> None:
-    if datetime.utcnow().weekday() >= 5:  # 5=Sat, 6=Sun — markets closed
+    if datetime.now(timezone.utc).weekday() >= 5:  # 5=Sat, 6=Sun — markets closed
         return
     today = date.today().strftime("%Y/%m/%d")
     title = "📊 台股收盤速報" if market == "TW" else "📊 美股收盤速報"
@@ -298,6 +315,38 @@ async def send_closing_digest(context: ContextTypes.DEFAULT_TYPE, market: str) -
                 )
         except Exception as e:
             logger.error("Closing digest failed for user %s: %s", user_id_str, e, exc_info=True)
+
+
+def schedule_daily_news(job_queue) -> None:
+    """(Re)schedule the morning news job from the saved Taipei-time setting."""
+    for job in job_queue.get_jobs_by_name(_NEWS_JOB_NAME):
+        job.schedule_removal()
+    hour, minute = parse_hhmm(get_news_time())
+    job_queue.run_daily(
+        send_daily_news,
+        time=time(hour=(hour - _TAIPEI_UTC_OFFSET) % 24, minute=minute, tzinfo=timezone.utc),
+        name=_NEWS_JOB_NAME,
+    )
+    logger.info("Daily news scheduled at %s Taipei", get_news_time())
+
+
+async def settime_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the morning news push time. Usage: /settime 08:30"""
+    if not context.args:
+        await update.message.reply_text(
+            f"目前晨報時間：每天 {get_news_time()}（台北時間，週末不推送）\n\n"
+            "修改範例：/settime 07:30"
+        )
+        return
+
+    raw = context.args[0]
+    if parse_hhmm(raw) is None:
+        await update.message.reply_text("時間格式錯誤，請用 24 小時制 HH:MM，例如：/settime 08:30")
+        return
+
+    normalized = set_news_time(raw)
+    schedule_daily_news(context.job_queue)
+    await update.message.reply_text(f"✅ 晨報時間已改為每天 {normalized}（台北時間，週末不推送）")
 
 
 async def send_tw_closing(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -343,6 +392,7 @@ def build_watch_handler(auth_filter):
         CommandHandler("unwatch", unwatch_command, filters=auth_filter),
         CommandHandler("watchlist", watchlist_command, filters=auth_filter),
         CommandHandler("news", news_command, filters=auth_filter),
+        CommandHandler("settime", settime_command, filters=auth_filter),
         CommandHandler("testclosing", testclosing_command, filters=auth_filter),
         CallbackQueryHandler(watch_add_callback, pattern="^wadd_"),
         CallbackQueryHandler(watch_delete_callback, pattern="^wdel_"),
