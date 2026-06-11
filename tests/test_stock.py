@@ -31,7 +31,8 @@ def test_fetch_us_data_returns_dict():
         result = fetch_us_data("AAPL")
 
     assert result["ticker"] == "AAPL"
-    assert result["name"] == "Apple Inc."
+    # clean_us_name strips corporate suffixes: "Apple Inc." → "Apple"
+    assert result["name"] == "Apple"
     assert result["price"] == 185.5
     assert result["market"] == "US"
     assert "pe_ratio" in result

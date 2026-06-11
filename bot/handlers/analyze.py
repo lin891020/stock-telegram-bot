@@ -4,7 +4,9 @@ from datetime import date
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
-from bot.services.stock import get_stock_summary, looks_like_ticker, search_ticker
+from bot.auth import restrict_callback
+from bot.services.stock import get_stock_summary, looks_like_ticker, search_ticker, is_taiwan_stock, clean_us_name
+from bot.services.tw_stocks import has_chinese, search_tw_stocks
 from bot.services.financials import get_financials, format_financials_for_prompt
 from bot.services.llm import call_llm
 from bot.services.pdf import generate_pdf
@@ -16,6 +18,17 @@ _SYSTEM = (
     "你是一位華爾街資深股票分析師，用繁體中文撰寫專業且深入的分析報告。"
     "分析時引用提供的真實財務數據，結論要有邏輯依據，語氣客觀。"
 )
+
+
+def _extract_brief(content: str) -> str:
+    """取出報告開頭的【速覽】區塊（到第一個章節標題為止）。"""
+    idx = content.find("【速覽】")
+    if idx == -1:
+        return ""
+    rest = content[idx:]
+    stop = rest.find("##")
+    brief = rest[:stop] if stop > 0 else rest[:600]
+    return brief.replace("**", "").strip()
 
 
 def _analysis_keyboard(ticker: str) -> InlineKeyboardMarkup:
@@ -44,9 +57,12 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
-    # Search by company name
+    # Search by company name — Chinese goes to the TWSE cache, otherwise yfinance
     await update.message.reply_text(f"搜尋「{query}」中...")
-    results = await asyncio.to_thread(search_ticker, query)
+    if has_chinese(query):
+        results = search_tw_stocks(query)
+    else:
+        results = await asyncio.to_thread(search_ticker, query)
 
     if not results:
         await update.message.reply_text(
@@ -54,9 +70,12 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
+    def _display_name(r: dict) -> str:
+        return r["name"] if is_taiwan_stock(r["symbol"]) else clean_us_name(r["name"])
+
     keyboard = [
         [InlineKeyboardButton(
-            f"{r['symbol']} — {r['name'][:30]}",
+            f"{r['symbol']} — {_display_name(r)[:30]}",
             callback_data=f"apick_{r['symbol']}",
         )]
         for r in results
@@ -67,6 +86,7 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
+@restrict_callback
 async def analyze_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """User picked a ticker from search results."""
     query = update.callback_query
@@ -80,6 +100,7 @@ async def analyze_pick_callback(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 
+@restrict_callback
 async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -118,11 +139,15 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         content = await asyncio.to_thread(call_llm, _SYSTEM, user_msg)
 
+        # 手機上先看 5 行結論，完整報告在 PDF
+        brief = _extract_brief(content)
+        if brief:
+            await query.message.reply_text(f"{ticker} — {label}\n\n{brief}")
+
         pdf_bytes = generate_pdf(ticker, label, content)
 
         today = date.today().strftime("%Y%m%d")
         company_name = stock_data.get("name", "") if isinstance(stock_data, dict) else ""
-        from bot.services.stock import is_taiwan_stock
         if is_taiwan_stock(ticker) and company_name:
             filename = f"{ticker}_{company_name}_{today}.pdf"
         else:

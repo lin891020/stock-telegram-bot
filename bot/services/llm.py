@@ -2,6 +2,7 @@ import httpx
 import anthropic as _anthropic
 from openai import OpenAI
 from bot.config import ANTHROPIC_API_KEY, GEMINI_API_KEY, GITHUB_TOKEN, LLM_PROVIDER
+from bot.services.settings import get_saved_model, save_model
 
 anthropic = _anthropic
 
@@ -19,7 +20,9 @@ ANTHROPIC_CHAT_MODEL = "claude-haiku-4-5-20251001"
 GITHUB_MODEL = "gpt-4o-mini"
 GITHUB_BASE_URL = "https://models.inference.ai.azure.com"
 
-_current_model: str = ANTHROPIC_ANALYSIS_MODEL
+# Restore the last /model selection across restarts
+_saved = get_saved_model()
+_current_model: str = _saved if _saved in AVAILABLE_MODELS else ANTHROPIC_ANALYSIS_MODEL
 
 
 def get_current_model() -> str:
@@ -31,6 +34,7 @@ def set_current_model(model_key: str) -> None:
     if model_key not in AVAILABLE_MODELS:
         raise ValueError(f"Unknown model: {model_key}")
     _current_model = model_key
+    save_model(model_key)
 
 
 def call_llm(system: str, user: str, model: str | None = None) -> str:

@@ -1,4 +1,5 @@
 import re
+import time
 import httpx
 import logging
 
@@ -6,6 +7,20 @@ logger = logging.getLogger(__name__)
 
 _TWSE_API = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
 _cache: dict[str, str] = {}  # {code: name}
+_last_load_attempt = 0.0
+_RELOAD_THROTTLE_SECONDS = 300
+
+
+def _ensure_cache() -> None:
+    """Retry loading if the startup load failed, throttled to avoid hammering TWSE."""
+    global _last_load_attempt
+    if _cache:
+        return
+    now = time.monotonic()
+    if now - _last_load_attempt < _RELOAD_THROTTLE_SECONDS:
+        return
+    _last_load_attempt = now
+    load_tw_stock_list()
 
 
 def load_tw_stock_list() -> None:
@@ -27,6 +42,7 @@ def load_tw_stock_list() -> None:
 
 def get_tw_name(code: str) -> str | None:
     """Return company name for a TW stock code, or None if not in cache."""
+    _ensure_cache()
     return _cache.get(code.upper())
 
 
@@ -36,6 +52,7 @@ def has_chinese(text: str) -> bool:
 
 def search_tw_stocks(query: str, max_results: int = 5) -> list[dict]:
     """Search TW stocks by name substring. Returns list of {symbol, name}."""
+    _ensure_cache()
     if not _cache:
         return []
     results = []
