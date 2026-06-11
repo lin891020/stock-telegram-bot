@@ -11,22 +11,34 @@ from bot.services.stock import is_taiwan_stock, get_stock_summary
 logger = logging.getLogger(__name__)
 
 
-def _format_price(stock_data: dict) -> str:
+# 單日漲跌幅絕對值達此門檻視為「大事」，會進重點分析區
+_BIG_MOVE_PCT = 3.0
+
+
+def _day_pct(stock_data: dict):
+    """單日漲跌幅（%），無資料回 None。"""
+    if not isinstance(stock_data, dict) or stock_data.get("error"):
+        return None
     price = stock_data.get("price") or stock_data.get("close")
     prev = stock_data.get("prev_close")
-    currency = "元" if stock_data.get("market") == "TW" else "USD"
+    if not price or not prev:
+        return None
+    return (price - prev) / prev * 100
 
+
+def _price_line(ticker: str, stock_data: dict) -> str:
+    name = stock_data.get("name", "") if isinstance(stock_data, dict) else ""
+    label = f"{name}({ticker})" if name and name != ticker else ticker
+    price = stock_data.get("price") or stock_data.get("close") if isinstance(stock_data, dict) else None
     if not price:
-        return ""
-
-    if prev and prev != 0:
-        change = price - prev
-        pct = change / prev * 100
-        arrow = "▲" if change >= 0 else "▼"
-        sign = "+" if change >= 0 else ""
-        return f"收 {price:.2f} {currency}  {arrow} {sign}{pct:.2f}%（{sign}{change:.2f}）"
-
-    return f"收 {price:.2f} {currency}"
+        return f"{label}  無報價"
+    pct = _day_pct(stock_data)
+    if pct is None:
+        return f"{label}  {price:,.2f}"
+    arrow = "▲" if pct >= 0 else "▼"
+    sign = "+" if pct >= 0 else ""
+    warn = " ⚠️" if abs(pct) >= _BIG_MOVE_PCT else ""
+    return f"{label}  {price:,.2f}  {arrow} {sign}{pct:.2f}%{warn}"
 
 
 _48H = 48 * 3600
@@ -112,16 +124,46 @@ def _parse_llm_sections(text: str, tickers: list[str]) -> dict[str, str]:
 
 
 async def fetch_and_summarize(tickers: list[str]) -> str:
+    """自選股快報（HTML）：行情總覽（異動排前）→ 重點分析（有新聞或大漲跌）→ 無大事收合。"""
     news_data_task = asyncio.to_thread(_build_news_data, tickers)
     price_tasks = [get_stock_summary(t) for t in tickers]
 
-    (news_block, news_items), *price_results = await asyncio.gather(news_data_task, *price_tasks)
+    (_, news_items), *price_results = await asyncio.gather(news_data_task, *price_tasks)
     prices = {t: data for t, data in zip(tickers, price_results)}
 
-    today = date.today().strftime("%Y/%m/%d")
+    def _sort_key(t: str):
+        pct = _day_pct(prices.get(t, {}))
+        return -abs(pct) if pct is not None else 0.0
 
-    system = "你是一位專業股票研究員。根據提供的新聞標題，為每支股票寫簡短分析。用繁體中文，語氣簡潔專業。"
-    user = f"""今天日期：{today}
+    ordered = sorted(tickers, key=_sort_key)
+
+    def _label(t: str) -> str:
+        data = prices.get(t, {})
+        name = data.get("name", "") if isinstance(data, dict) else ""
+        return f"{name}({t})" if name and name != t else t
+
+    # 有新聞或單日漲跌 >= 3% 才進重點分析；其餘收合成一行
+    active = [
+        t for t in ordered
+        if news_items.get(t) or abs(_day_pct(prices.get(t, {})) or 0) >= _BIG_MOVE_PCT
+    ]
+    quiet = [t for t in ordered if t not in active]
+
+    parts = []
+
+    price_block = "\n".join(_price_line(t, prices.get(t, {})) for t in ordered)
+    parts.append(f"💼 自選股行情\n{html.escape(price_block)}")
+
+    if active:
+        today = date.today().strftime("%Y/%m/%d")
+        news_block = "\n\n".join(
+            f"=== {t} ===\n" + (
+                "\n".join(f"- {i['title']}" for i in news_items[t]) if news_items.get(t) else "（無新聞）"
+            )
+            for t in active
+        )
+        system = "你是一位專業股票研究員。根據提供的新聞標題，為每支股票寫簡短分析。用繁體中文，語氣簡潔專業。"
+        user = f"""今天日期：{today}
 
 以下是各股票的最新新聞標題。請針對每支股票寫 2-3 句新聞摘要，最後一行標出影響方向。
 若無新聞則只輸出「（本日無相關新聞）」。
@@ -135,32 +177,25 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
 
 {news_block}"""
 
-    llm_output = await asyncio.to_thread(call_llm, system, user)
-    sections = _parse_llm_sections(llm_output, tickers)
+        llm_output = await asyncio.to_thread(call_llm, system, user)
+        sections = _parse_llm_sections(llm_output, active)
 
-    output_parts = []
-    for t in tickers:
-        data = prices.get(t, {})
-        name = data.get("name", "") if isinstance(data, dict) else ""
-        label = f"{name}({t})" if name and name != t else t
-        price_line = _format_price(data) if isinstance(data, dict) and not data.get("error") else ""
-        analysis = sections.get(t.upper(), "（無資料）")
+        analysis_parts = []
+        for t in active:
+            analysis = sections.get(t.upper(), "（無資料）")
+            block = f"<b>{html.escape(_label(t))}</b>\n{html.escape(analysis)}"
+            items_with_url = [i for i in news_items.get(t, []) if i.get("url")]
+            if items_with_url:
+                links = "\n".join(
+                    f'• <a href="{html.escape(i["url"])}">{html.escape(i["title"][:55])}{"…" if len(i["title"]) > 55 else ""}</a>'
+                    for i in items_with_url[:3]
+                )
+                block += f"\n{links}"
+            analysis_parts.append(block)
+        parts.append("📌 重點分析\n\n" + "\n\n".join(analysis_parts))
 
-        block = html.escape(label)
-        if price_line:
-            block += f"\n\n{html.escape(price_line)}"
-        block += f"\n\n{html.escape(analysis)}"
+    if quiet:
+        quiet_labels = "、".join(_label(t) for t in quiet)
+        parts.append(html.escape(f"😴 無大事：{quiet_labels}"))
 
-        items_with_url = [i for i in news_items.get(t, []) if i.get("url")]
-        if items_with_url:
-            links = "\n".join(
-                f'• <a href="{html.escape(i["url"])}">{html.escape(i["title"][:55])}{"…" if len(i["title"]) > 55 else ""}</a>'
-                for i in items_with_url[:3]
-            )
-            block += f"\n\nSource:\n{links}"
-
-        output_parts.append(block)
-
-    header = html.escape(f"晨報 {today}")
-    body = "\n\n---\n\n".join(output_parts)
-    return f"{header}\n\n{body}"
+    return "\n\n".join(parts)

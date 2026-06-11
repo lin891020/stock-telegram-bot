@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 from datetime import date, datetime, time, timedelta, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -8,8 +9,9 @@ import yfinance as yf
 
 from bot.auth import restrict_callback
 from bot.services.watchlist import get_watchlist_with_names, get_watchlist, add_ticker, remove_ticker, _load
+from bot.services.market import fetch_market_summary
 from bot.services.news import fetch_and_summarize
-from bot.services.settings import get_news_time, set_news_time, parse_hhmm
+from bot.services.settings import get_time, set_time, get_news_time, parse_hhmm
 from bot.services.stock import looks_like_ticker, search_ticker, get_stock_summary, is_taiwan_stock, clean_us_name
 from bot.services.tw_stocks import get_tw_name, has_chinese, search_tw_stocks
 
@@ -38,11 +40,12 @@ def _wadd_callback_data(symbol: str, name: str) -> str:
 
 
 def _build_watchlist_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
+    # 點名稱開股票卡片，點 ❌ 移除
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(
-            f"{_label(i['ticker'], i['name'])}  ❌",
-            callback_data=f"wdel_{i['ticker']}",
-        )]
+        [
+            InlineKeyboardButton(_label(i["ticker"], i["name"]), callback_data=f"card_{i['ticker']}"),
+            InlineKeyboardButton("❌", callback_data=f"wdel_{i['ticker']}"),
+        ]
         for i in items
     ])
 
@@ -257,10 +260,64 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     try:
         summary = await fetch_and_summarize(tickers)
-        await update.message.reply_text(summary, parse_mode="HTML")
+        await _send_long(context.bot, update.effective_chat.id, summary, parse_mode="HTML")
     except Exception as e:
         logger.error("news_command failed: %s", e, exc_info=True)
         await update.message.reply_text("❌ 新聞抓取失敗，請稍後再試")
+
+
+# Telegram 訊息上限 4096 字，預留餘裕在段落邊界切分
+_MAX_MSG_LEN = 3500
+
+
+async def _send_long(bot, chat_id: int, text: str, parse_mode: str = None) -> None:
+    """超過 Telegram 上限時在空行邊界切成多則訊息。"""
+    if len(text) <= _MAX_MSG_LEN:
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+        return
+    chunk = ""
+    for para in text.split("\n\n"):
+        candidate = f"{chunk}\n\n{para}" if chunk else para
+        if len(candidate) > _MAX_MSG_LEN and chunk:
+            await bot.send_message(chat_id=chat_id, text=chunk, parse_mode=parse_mode)
+            chunk = para
+        else:
+            chunk = candidate
+    if chunk:
+        await bot.send_message(chat_id=chat_id, text=chunk, parse_mode=parse_mode)
+
+
+async def _build_morning_header(user_id: int = 0) -> str:
+    """大盤＋今日大事（財報日、掛著的提醒），任一失敗都不影響晨報主體。"""
+    parts = []
+    try:
+        market = await fetch_market_summary()
+        if market:
+            parts.append(f"🌐 大盤（隔夜美股已收）\n{html.escape(market)}")
+    except Exception as e:
+        logger.warning("morning market summary failed: %s", e)
+
+    today_lines = []
+    try:
+        from bot.services.earnings_watch import build_earnings_reminders
+        reminders = await build_earnings_reminders()
+        if reminders:
+            today_lines.append(reminders)
+    except Exception as e:
+        logger.warning("morning earnings reminders failed: %s", e)
+
+    try:
+        from bot.services.alerts import get_alerts
+        count = len(get_alerts(user_id)) if user_id else 0
+        if count:
+            today_lines.append(f"• 🔔 掛著 {count} 個價格提醒（/alert 查看）")
+    except Exception as e:
+        logger.warning("morning alerts count failed: %s", e)
+
+    if today_lines:
+        parts.append("📋 今天\n" + "\n".join(today_lines))
+
+    return "\n\n".join(parts)
 
 
 async def send_daily_news(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -268,15 +325,19 @@ async def send_daily_news(context: ContextTypes.DEFAULT_TYPE) -> None:
     if taipei_now.weekday() >= 5:  # 5=Sat, 6=Sun
         return
     all_data = _load()
+    today = date.today().strftime("%m/%d")
     for user_id_str, raw in all_data.items():
         tickers = list(raw.keys()) if isinstance(raw, dict) else raw
         if not tickers:
             continue
         try:
+            header = await _build_morning_header(int(user_id_str))
             summary = await fetch_and_summarize(tickers)
-            await context.bot.send_message(
-                chat_id=int(user_id_str),
-                text=f"📰 早安！追蹤股票晨報\n\n{summary}",
+            header_block = f"{header}\n\n" if header else ""
+            await _send_long(
+                context.bot,
+                int(user_id_str),
+                f"📰 早安！{today} 起床報\n\n{header_block}{summary}",
                 parse_mode="HTML",
             )
         except Exception as e:
@@ -317,44 +378,66 @@ async def send_closing_digest(context: ContextTypes.DEFAULT_TYPE, market: str) -
             logger.error("Closing digest failed for user %s: %s", user_id_str, e, exc_info=True)
 
 
-def schedule_daily_news(job_queue) -> None:
-    """(Re)schedule the morning news job from the saved Taipei-time setting."""
-    for job in job_queue.get_jobs_by_name(_NEWS_JOB_NAME):
+def _schedule_named_daily(job_queue, name: str, time_key: str, callback) -> None:
+    """(Re)schedule a named daily job from the saved Taipei-time setting."""
+    for job in job_queue.get_jobs_by_name(name):
         job.schedule_removal()
-    hour, minute = parse_hhmm(get_news_time())
+    hour, minute = parse_hhmm(get_time(time_key))
     job_queue.run_daily(
-        send_daily_news,
+        callback,
         time=time(hour=(hour - _TAIPEI_UTC_OFFSET) % 24, minute=minute, tzinfo=timezone.utc),
-        name=_NEWS_JOB_NAME,
+        name=name,
     )
-    logger.info("Daily news scheduled at %s Taipei", get_news_time())
+    logger.info("Job %s scheduled at %s Taipei", name, get_time(time_key))
+
+
+def schedule_daily_news(job_queue) -> None:
+    _schedule_named_daily(job_queue, _NEWS_JOB_NAME, "news", send_daily_news)
+
+
+def schedule_tw_closing(job_queue) -> None:
+    _schedule_named_daily(job_queue, "tw_closing", "tw_close", send_tw_closing)
+
+
+_SETTIME_TARGETS = {
+    "news": ("起床報", "news", schedule_daily_news),
+    "tw": ("台股收盤速報", "tw_close", schedule_tw_closing),
+}
 
 
 async def settime_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set the morning news push time. Usage: /settime 08:30"""
+    """Set push times. Usage: /settime 06:30 (起床報) | /settime tw 14:30"""
     if not context.args:
         await update.message.reply_text(
-            f"目前晨報時間：每天 {get_news_time()}（台北時間，週末不推送）\n\n"
-            "修改範例：/settime 07:30"
+            "目前推送時間（台北時間，週末不推送）：\n"
+            f"• 起床報（含隔夜美股收盤）：{get_time('news')}\n"
+            f"• 台股收盤速報：{get_time('tw_close')}\n\n"
+            "修改範例：\n/settime 06:30（起床報）\n/settime tw 14:30"
         )
         return
 
-    raw = context.args[0]
+    if len(context.args) >= 2 and context.args[0].lower() in _SETTIME_TARGETS:
+        target_key = context.args[0].lower()
+        raw = context.args[1]
+    else:
+        target_key = "news"
+        raw = context.args[0]
+
+    label, time_key, reschedule = _SETTIME_TARGETS[target_key]
+
     if parse_hhmm(raw) is None:
-        await update.message.reply_text("時間格式錯誤，請用 24 小時制 HH:MM，例如：/settime 08:30")
+        await update.message.reply_text(
+            "時間格式錯誤，請用 24 小時制 HH:MM，例如：\n/settime 08:30\n/settime tw 14:30"
+        )
         return
 
-    normalized = set_news_time(raw)
-    schedule_daily_news(context.job_queue)
-    await update.message.reply_text(f"✅ 晨報時間已改為每天 {normalized}（台北時間，週末不推送）")
+    normalized = set_time(time_key, raw)
+    reschedule(context.job_queue)
+    await update.message.reply_text(f"✅ {label}時間已改為每天 {normalized}（台北時間，週末不推送）")
 
 
 async def send_tw_closing(context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_closing_digest(context, "TW")
-
-
-async def send_us_closing(context: ContextTypes.DEFAULT_TYPE) -> None:
-    await send_closing_digest(context, "US")
 
 
 async def testclosing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
