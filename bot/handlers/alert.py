@@ -7,6 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 from bot.auth import restrict_callback
+from bot.handlers.pending import ask, register
 from bot.services.alerts import (
     parse_condition, describe_condition, condition_text, is_triggered,
     get_alerts, add_alert, remove_alert, all_alerts,
@@ -57,13 +58,14 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    if len(context.args) < 2:
-        await update.message.reply_text(_USAGE)
-        return
-
     ticker = context.args[0].upper().strip()
     if not looks_like_ticker(ticker):
         await update.message.reply_text(f"「{ticker}」不像股票代號。\n\n{_USAGE}")
+        return
+
+    if len(context.args) < 2:
+        # 只給代號 → 追問條件
+        await ask_alert_condition(update.message, context, ticker)
         return
 
     condition = parse_condition(" ".join(context.args[1:]))
@@ -75,6 +77,22 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(
         f"✅ 已設定提醒：{_alert_label(alert)}\n\n盤中每 10 分鐘檢查，觸發後會自動移除"
     )
+
+
+async def ask_alert_condition(message, context, ticker: str) -> None:
+    """兩段式設提醒：追問條件，回覆即設定。卡片的 🔔 按鈕也走這裡。"""
+    await ask(
+        message, context, "alert",
+        f"輸入 {ticker} 的提醒條件：\n>1100（漲破）、<950（跌破）、+5%（單日漲）、-5%（單日跌）",
+        ticker=ticker,
+    )
+
+
+@register("alert")
+async def _pending_alert(update: Update, context: ContextTypes.DEFAULT_TYPE, pending: dict) -> None:
+    ticker = pending.get("ticker", "")
+    context.args = ([ticker] if ticker else []) + update.message.text.split()
+    await alert_command(update, context)
 
 
 @restrict_callback

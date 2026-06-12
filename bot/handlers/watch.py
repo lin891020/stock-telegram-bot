@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 import yfinance as yf
 
 from bot.auth import restrict_callback
+from bot.handlers.pending import ask, register
 from bot.services.watchlist import get_watchlist_with_names, get_watchlist, add_ticker, remove_ticker, _load
 from bot.services.market import fetch_market_summary
 from bot.services.news import fetch_and_summarize
@@ -74,7 +75,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = update.effective_user.id
 
     if not context.args:
-        await update.message.reply_text("請輸入股票代號或名稱，例如：/watch 2408 或 /watch 南亞科\n查看清單：/watchlist")
+        await ask(update.message, context, "watch", "輸入要加入追蹤的代號或名稱：")
         return
 
     query_text = " ".join(context.args).strip()
@@ -209,7 +210,7 @@ async def unwatch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = update.effective_user.id
 
     if not context.args:
-        await update.message.reply_text("請輸入要移除的代號或名稱，例如：/unwatch TSLA 或 /unwatch Tesla")
+        await ask(update.message, context, "unwatch", "輸入要移除追蹤的代號或名稱：")
         return
 
     query_text = " ".join(context.args).strip()
@@ -405,6 +406,18 @@ _SETTIME_TARGETS = {
 }
 
 
+def _settime_keyboard() -> InlineKeyboardMarkup:
+    news_row = [
+        InlineKeyboardButton(t, callback_data=f"stime_news_{t}")
+        for t in ("05:30", "06:00", "06:30", "07:00", "07:30")
+    ]
+    tw_row = [
+        InlineKeyboardButton(t, callback_data=f"stime_tw_{t}")
+        for t in ("14:00", "14:30", "15:00")
+    ]
+    return InlineKeyboardMarkup([news_row, tw_row])
+
+
 async def settime_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set push times. Usage: /settime 06:30 (起床報) | /settime tw 14:30"""
     if not context.args:
@@ -412,7 +425,9 @@ async def settime_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "目前推送時間（台北時間，週末不推送）：\n"
             f"• 起床報（含隔夜美股收盤）：{get_time('news')}\n"
             f"• 台股收盤速報：{get_time('tw_close')}\n\n"
-            "修改範例：\n/settime 06:30（起床報）\n/settime tw 14:30"
+            "點按鈕直接改（上排：起床報，下排：台股收盤），\n"
+            "或輸入自訂時間：/settime 06:45、/settime tw 14:10",
+            reply_markup=_settime_keyboard(),
         )
         return
 
@@ -434,6 +449,23 @@ async def settime_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     normalized = set_time(time_key, raw)
     reschedule(context.job_queue)
     await update.message.reply_text(f"✅ {label}時間已改為每天 {normalized}（台北時間，週末不推送）")
+
+
+@restrict_callback
+async def settime_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/settime 預設時間按鈕：stime_{key}_{HH:MM}"""
+    query = update.callback_query
+    await query.answer()
+
+    _, target_key, raw = query.data.split("_", 2)
+    if target_key not in _SETTIME_TARGETS or parse_hhmm(raw) is None:
+        await query.edit_message_text("❌ 無效的時間選項，請重新使用 /settime")
+        return
+
+    label, time_key, reschedule = _SETTIME_TARGETS[target_key]
+    normalized = set_time(time_key, raw)
+    reschedule(context.job_queue)
+    await query.edit_message_text(f"✅ {label}時間已改為每天 {normalized}（台北時間，週末不推送）")
 
 
 async def send_tw_closing(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -469,6 +501,18 @@ async def testclosing_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("無法取得報價資料")
 
 
+@register("watch")
+async def _pending_watch(update: Update, context: ContextTypes.DEFAULT_TYPE, pending: dict) -> None:
+    context.args = update.message.text.split()
+    await watch_command(update, context)
+
+
+@register("unwatch")
+async def _pending_unwatch(update: Update, context: ContextTypes.DEFAULT_TYPE, pending: dict) -> None:
+    context.args = update.message.text.split()
+    await unwatch_command(update, context)
+
+
 def build_watch_handler(auth_filter):
     return [
         CommandHandler("watch", watch_command, filters=auth_filter),
@@ -479,4 +523,5 @@ def build_watch_handler(auth_filter):
         CommandHandler("testclosing", testclosing_command, filters=auth_filter),
         CallbackQueryHandler(watch_add_callback, pattern="^wadd_"),
         CallbackQueryHandler(watch_delete_callback, pattern="^wdel_"),
+        CallbackQueryHandler(settime_pick_callback, pattern="^stime_"),
     ]

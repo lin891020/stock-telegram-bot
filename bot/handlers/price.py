@@ -3,6 +3,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
 
+from bot.handlers.pending import ask, register
 from bot.services.stock import get_stock_summary
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ def _format_price_line(ticker: str, data: dict) -> str:
 
 async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.message.reply_text("請輸入股票代號，例如：\n/price TSLA\n/price TSLA AAPL 2330")
+        await ask(update.message, context, "price", "輸入股票代號（可多支，空格分隔）：")
         return
 
     tickers = [a.upper().strip() for a in context.args]
@@ -46,6 +47,12 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             lines.append(_format_price_line(t, data))
 
     await update.message.reply_text("\n\n".join(lines))
+
+
+@register("price")
+async def _pending_price(update: Update, context: ContextTypes.DEFAULT_TYPE, pending: dict) -> None:
+    context.args = update.message.text.split()
+    await price_command(update, context)
 
 
 def build_price_handler(auth_filter):

@@ -3,9 +3,10 @@ import json
 import logging
 import os
 from typing import Optional
-from telegram import Update
-from telegram.ext import ContextTypes, CommandHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
+from bot.auth import restrict_callback
 from bot.services.llm import call_llm, ANTHROPIC_CHAT_MODEL
 
 logger = logging.getLogger(__name__)
@@ -31,15 +32,25 @@ def _find_lesson(topic: str, lessons: dict) -> Optional[str]:
     return None
 
 
+def _topics_keyboard(lessons: dict) -> InlineKeyboardMarkup:
+    # callback 用索引避開 64 bytes 中文限制，每排兩顆
+    keys = list(lessons.keys())
+    rows = []
+    for j in range(0, len(keys), 2):
+        rows.append([
+            InlineKeyboardButton(k, callback_data=f"learn_{j + i}")
+            for i, k in enumerate(keys[j:j + 2])
+        ])
+    return InlineKeyboardMarkup(rows)
+
+
 async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
         lessons = _load_lessons()
-        topic_list = "、".join(lessons.keys())
         await update.message.reply_text(
-            f"📚 輸入你想學的主題，例如：\n"
-            f"/learn ETF\n/learn 緊急備用金\n/learn 本益比\n\n"
-            f"已有內容：{topic_list}\n\n"
-            f"找不到的主題會由 AI 即時回答。"
+            "📚 點主題直接看，或輸入想學的主題（例如 /learn 本益比），\n"
+            "沒有現成內容的主題會由 AI 即時回答：",
+            reply_markup=_topics_keyboard(lessons),
         )
         return
 
@@ -68,5 +79,23 @@ async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text(f"查詢失敗：{exc}")
 
 
+@restrict_callback
+async def learn_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    lessons = _load_lessons()
+    keys = list(lessons.keys())
+    try:
+        topic = keys[int(query.data[len("learn_"):])]
+    except (ValueError, IndexError):
+        await query.message.reply_text("❌ 找不到該主題，請重新使用 /learn")
+        return
+    await query.message.reply_text(lessons[topic])
+
+
 def build_learn_handler(auth_filter):
-    return CommandHandler("learn", learn_command, filters=auth_filter)
+    return [
+        CommandHandler("learn", learn_command, filters=auth_filter),
+        CallbackQueryHandler(learn_pick_callback, pattern="^learn_"),
+    ]

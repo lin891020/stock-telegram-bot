@@ -5,6 +5,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 from bot.auth import restrict_callback
+from bot.handlers.pending import ask, register
 from bot.services.stock import get_stock_summary, looks_like_ticker, search_ticker, is_taiwan_stock, clean_us_name
 from bot.services.tw_stocks import has_chinese, search_tw_stocks
 from bot.services.financials import get_financials, format_financials_for_prompt
@@ -40,10 +41,7 @@ def _analysis_keyboard(ticker: str) -> InlineKeyboardMarkup:
 
 async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.message.reply_text(
-            "請輸入股票代號或公司名稱，例如：\n"
-            "/analyze 2330\n/analyze TSLA\n/analyze Micron"
-        )
+        await ask(update.message, context, "analyze", "輸入要分析的股票代號或公司名稱：")
         return
 
     query = " ".join(context.args).strip()
@@ -163,6 +161,12 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except Exception as exc:
         logger.error("Analysis failed for %s/%s: %s", ticker, analysis_key, exc, exc_info=True)
         await query.edit_message_text(f"❌ 分析失敗，請稍後再試")
+
+
+@register("analyze")
+async def _pending_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE, pending: dict) -> None:
+    context.args = update.message.text.split()
+    await analyze_command(update, context)
 
 
 def build_analyze_handler(auth_filter):

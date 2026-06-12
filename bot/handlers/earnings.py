@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 from bot.auth import restrict_callback
 from bot.config import ALLOWED_TELEGRAM_ID
+from bot.handlers.pending import ask, register
 from bot.services.earnings import fetch_earnings_data
 from bot.services.earnings_watch import get_pending_announcements, mark_analyzed
 from bot.services.llm import call_llm
@@ -98,9 +99,7 @@ async def _run_earnings_analysis(ticker: str) -> str:
 
 async def earnings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.message.reply_text(
-            "請輸入股票代號或公司名稱，例如：\n/earnings TSLA\n/earnings 2330\n/earnings 泓德能源"
-        )
+        await ask(update.message, context, "earnings", "輸入要查財報的股票代號或名稱：")
         return
 
     query = " ".join(context.args).strip()
@@ -156,6 +155,12 @@ async def earnings_pick_callback(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as e:
         logger.error("earnings failed for %s: %s", ticker, e, exc_info=True)
         await query.edit_message_text("❌ 分析失敗，請稍後再試")
+
+
+@register("earnings")
+async def _pending_earnings(update: Update, context: ContextTypes.DEFAULT_TYPE, pending: dict) -> None:
+    context.args = update.message.text.split()
+    await earnings_command(update, context)
 
 
 async def poll_earnings_announcements(context: ContextTypes.DEFAULT_TYPE) -> None:

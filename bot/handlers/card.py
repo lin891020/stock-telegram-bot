@@ -10,6 +10,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, MessageHandler, CallbackQueryHandler, filters
 
 from bot.auth import restrict_callback
+from bot.handlers.alert import ask_alert_condition
+from bot.handlers.pending import dispatch_pending
 from bot.services.recent import add_recent
 from bot.services.stock import (
     get_stock_summary, looks_like_ticker, search_ticker, is_taiwan_stock, clean_us_name,
@@ -70,7 +72,10 @@ async def send_stock_card(message, ticker: str) -> None:
 
 
 async def text_lookup_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """純文字（非指令）：代號直接出卡片，名稱先搜尋。"""
+    """純文字（非指令）：先看有沒有等待中的兩段式輸入，否則代號出卡片、名稱搜尋。"""
+    if await dispatch_pending(update, context):
+        return
+
     query = (update.message.text or "").strip()
     if not query or len(query) > _MAX_QUERY_LEN:
         return
@@ -119,16 +124,11 @@ async def card_open_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @restrict_callback
 async def alert_hint_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """卡片的 🔔 按鈕：兩段式追問條件，回覆即設定。"""
     query = update.callback_query
     await query.answer()
     ticker = query.data[len("ahint_"):]
-    await query.message.reply_text(
-        f"設定 {ticker} 的價格提醒，直接輸入：\n\n"
-        f"/alert {ticker} >1100 — 漲破 1100\n"
-        f"/alert {ticker} <950 — 跌破 950\n"
-        f"/alert {ticker} +5% — 單日漲 5%\n"
-        f"/alert {ticker} -5% — 單日跌 5%"
-    )
+    await ask_alert_condition(query.message, context, ticker)
 
 
 def build_card_handlers(auth_filter):

@@ -4,6 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMe
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 from bot.auth import restrict_callback
+from bot.handlers.pending import ask, register
 from bot.services.charts import render_chart, PERIODS
 from bot.services.stock import looks_like_ticker, is_taiwan_stock
 from bot.services.tw_stocks import get_tw_name
@@ -42,7 +43,10 @@ async def _render(ticker: str, period: str) -> tuple:
 
 async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.message.reply_text(_USAGE)
+        await ask(
+            update.message, context, "chart",
+            "輸入股票代號（可加期間 1m/3m/6m/1y，例：2330 1y）：",
+        )
         return
 
     ticker = context.args[0].upper().strip()
@@ -107,6 +111,12 @@ async def chart_period_callback(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         # 從股票卡片進來 → 另發一張圖
         await query.message.reply_photo(photo=png, caption=caption, reply_markup=keyboard)
+
+
+@register("chart")
+async def _pending_chart(update: Update, context: ContextTypes.DEFAULT_TYPE, pending: dict) -> None:
+    context.args = update.message.text.split()
+    await chart_command(update, context)
 
 
 def build_chart_handler(auth_filter):

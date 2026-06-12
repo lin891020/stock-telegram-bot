@@ -60,7 +60,9 @@ def main() -> None:
     for handler in build_analyze_handler(auth):
         app.add_handler(handler)
 
-    app.add_handler(build_learn_handler(auth))
+    for handler in build_learn_handler(auth):
+        app.add_handler(handler)
+
     app.add_handler(build_finance_handler(auth))
 
     for handler in build_model_handler(auth):
