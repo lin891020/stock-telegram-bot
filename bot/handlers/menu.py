@@ -2,6 +2,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler
 
 from bot.auth import restrict_callback
+from bot.handlers.learn import _topics_keyboard, _load_lessons
+from bot.handlers.pending import ask
 from bot.services.recent import get_recent
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -77,8 +79,12 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     data = query.data
 
     if data == "menu_analyze":
-        await query.message.reply_text("請輸入股票代號：\n/analyze 2330\n/analyze TSLA")
+        # 兩段式：直接追問，回覆代號或名稱即可
+        await ask(query.message, context, "analyze", "輸入要分析的股票代號或公司名稱：")
     elif data == "menu_finance":
         await query.message.reply_text("輸入 /finance 開始個人理財教練")
     elif data == "menu_learn":
-        await query.message.reply_text("輸入 /learn <主題>，例如：\n/learn ETF\n/learn 緊急備用金")
+        await query.message.reply_text(
+            "📚 點主題直接看，或輸入 /learn <主題>：",
+            reply_markup=_topics_keyboard(_load_lessons()),
+        )

@@ -43,14 +43,24 @@ def _ensure_font() -> Optional[str]:
 def render_chart(ticker: str, period_key: str, title_name: str = "") -> Optional[bytes]:
     """Render a daily candlestick PNG (volume + MA20/60). Returns None if no data."""
     days, fetch_period, _ = PERIODS[period_key]
-    symbol = f"{ticker}.TW" if is_taiwan_stock(ticker) else ticker
+    # 台股先試上市（.TW）再試上櫃（.TWO）
+    symbols = [f"{ticker}.TW", f"{ticker}.TWO"] if is_taiwan_stock(ticker) else [ticker]
 
-    try:
-        df = yf.Ticker(symbol).history(period=fetch_period, interval="1d", auto_adjust=False)
-    except Exception as e:
-        logger.warning("chart history failed for %s: %s", symbol, e)
-        return None
+    df = None
+    for symbol in symbols:
+        try:
+            df = yf.Ticker(symbol).history(period=fetch_period, interval="1d", auto_adjust=False)
+        except Exception as e:
+            logger.warning("chart history failed for %s: %s", symbol, e)
+            continue
+        if df is not None and not df.empty and "Close" in df.columns:
+            break
     if df is None or df.empty or "Close" not in df.columns:
+        return None
+
+    # Yahoo 偶爾夾帶整列 NaN（尤其上櫃），mplfinance 無法處理
+    df = df.dropna(subset=["Open", "High", "Low", "Close"])
+    if df.empty:
         return None
 
     df["MA20"] = df["Close"].rolling(20).mean()

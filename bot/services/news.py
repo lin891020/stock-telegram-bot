@@ -6,7 +6,7 @@ import time
 from datetime import date, datetime, timezone
 import yfinance as yf
 
-from bot.services.llm import call_llm
+from bot.services.llm import call_llm_light
 from bot.services.stock import is_taiwan_stock, get_stock_summary
 logger = logging.getLogger(__name__)
 
@@ -177,7 +177,8 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
 
 {news_block}"""
 
-        llm_output = await asyncio.to_thread(call_llm, system, user)
+        # 新聞摘要屬低難度任務，用輕量模型（每天晨報都會呼叫，省成本）
+        llm_output = await asyncio.to_thread(call_llm_light, system, user)
         sections = _parse_llm_sections(llm_output, active)
 
         analysis_parts = []

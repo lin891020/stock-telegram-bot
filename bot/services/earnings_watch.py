@@ -1,9 +1,11 @@
+import asyncio
 import json
 import logging
 from datetime import date, timedelta
 from pathlib import Path
 
 from bot.services.earnings import fetch_earnings_data
+from bot.services.stock import is_taiwan_stock
 from bot.services.watchlist import _load as _load_watchlists
 
 logger = logging.getLogger(__name__)
@@ -78,11 +80,17 @@ async def build_earnings_reminders() -> str:
     tomorrow = today + timedelta(days=1)
     lines = []
 
-    for ticker in _all_watchlist_tickers():
-        try:
-            data = await fetch_earnings_data(ticker)
-        except Exception as e:
-            logger.warning("earnings reminder fetch failed for %s: %s", ticker, e)
+    # 並行抓取；台股在 yfinance 上幾乎沒有財報日資料，直接跳過省時間
+    tickers = [t for t in _all_watchlist_tickers() if not is_taiwan_stock(t)]
+    if not tickers:
+        return ""
+    results = await asyncio.gather(
+        *[fetch_earnings_data(t) for t in tickers], return_exceptions=True
+    )
+
+    for ticker, data in zip(tickers, results):
+        if isinstance(data, Exception):
+            logger.warning("earnings reminder fetch failed for %s: %s", ticker, data)
             continue
         if data.get("error"):
             continue

@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 import yfinance as yf
 
 from bot.auth import restrict_callback
+from bot.handlers.messaging import send_long
 from bot.handlers.pending import ask, register
 from bot.services.watchlist import get_watchlist_with_names, get_watchlist, add_ticker, remove_ticker, _load
 from bot.services.market import fetch_market_summary
@@ -261,31 +262,10 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     try:
         summary = await fetch_and_summarize(tickers)
-        await _send_long(context.bot, update.effective_chat.id, summary, parse_mode="HTML")
+        await send_long(context.bot, update.effective_chat.id, summary, parse_mode="HTML")
     except Exception as e:
         logger.error("news_command failed: %s", e, exc_info=True)
         await update.message.reply_text("❌ 新聞抓取失敗，請稍後再試")
-
-
-# Telegram 訊息上限 4096 字，預留餘裕在段落邊界切分
-_MAX_MSG_LEN = 3500
-
-
-async def _send_long(bot, chat_id: int, text: str, parse_mode: str = None) -> None:
-    """超過 Telegram 上限時在空行邊界切成多則訊息。"""
-    if len(text) <= _MAX_MSG_LEN:
-        await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
-        return
-    chunk = ""
-    for para in text.split("\n\n"):
-        candidate = f"{chunk}\n\n{para}" if chunk else para
-        if len(candidate) > _MAX_MSG_LEN and chunk:
-            await bot.send_message(chat_id=chat_id, text=chunk, parse_mode=parse_mode)
-            chunk = para
-        else:
-            chunk = candidate
-    if chunk:
-        await bot.send_message(chat_id=chat_id, text=chunk, parse_mode=parse_mode)
 
 
 async def _build_morning_header(user_id: int = 0) -> str:
@@ -335,7 +315,7 @@ async def send_daily_news(context: ContextTypes.DEFAULT_TYPE) -> None:
             header = await _build_morning_header(int(user_id_str))
             summary = await fetch_and_summarize(tickers)
             header_block = f"{header}\n\n" if header else ""
-            await _send_long(
+            await send_long(
                 context.bot,
                 int(user_id_str),
                 f"📰 早安！{today} 起床報\n\n{header_block}{summary}",

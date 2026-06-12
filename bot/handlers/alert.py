@@ -126,14 +126,17 @@ def _us_market_open(taipei_now: datetime) -> bool:
 
 
 def _fetch_quote_sync(ticker: str) -> tuple:
-    """Return (last_price, prev_close) or (None, None)."""
-    symbol = f"{ticker}.TW" if is_taiwan_stock(ticker) else ticker
-    try:
-        info = yf.Ticker(symbol).fast_info
-        return info.last_price, info.previous_close
-    except Exception as e:
-        logger.warning("alert quote failed for %s: %s", ticker, e)
-        return None, None
+    """Return (last_price, prev_close) or (None, None). 台股含上櫃 fallback。"""
+    symbols = [f"{ticker}.TW", f"{ticker}.TWO"] if is_taiwan_stock(ticker) else [ticker]
+    for symbol in symbols:
+        try:
+            info = yf.Ticker(symbol).fast_info
+            if info.last_price:
+                return info.last_price, info.previous_close
+        except Exception:
+            continue
+    logger.warning("alert quote failed for %s", ticker)
+    return None, None
 
 
 async def check_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:

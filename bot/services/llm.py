@@ -49,6 +49,18 @@ def call_llm(system: str, user: str, model: str | None = None) -> str:
     return _call_github(system, user)
 
 
+def call_llm_light(system: str, user: str) -> str:
+    """低難度任務（新聞摘要、收盤速報等）。
+
+    Anthropic provider 時固定用 Haiku 省成本（每天推播都會呼叫）；
+    免費 provider（Gemini/GitHub）則照用目前選的模型。
+    """
+    _, provider = AVAILABLE_MODELS.get(_current_model, ("", LLM_PROVIDER))
+    if provider == "anthropic":
+        return _call_anthropic(system, user, ANTHROPIC_CHAT_MODEL)
+    return call_llm(system, user)
+
+
 def _call_anthropic(system: str, user: str, model: str) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     response = client.messages.create(

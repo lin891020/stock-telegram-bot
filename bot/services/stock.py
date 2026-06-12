@@ -106,6 +106,35 @@ async def _fetch_month(client: httpx.AsyncClient, stock_no: str, query_date: dat
             await asyncio.sleep(2 ** attempt)
     return []
 
+def _fetch_tw_via_yf(ticker: str) -> dict:
+    """上櫃股票不在 TWSE 上市 API，fallback 到 yfinance（.TWO 上櫃 / .TW 上市）。"""
+    from bot.services.tw_stocks import get_tw_name
+    for suffix in (".TWO", ".TW"):
+        try:
+            stock = yf.Ticker(f"{ticker}{suffix}")
+            info = stock.fast_info
+            price = info.last_price
+            if not price:
+                continue
+            prev = info.previous_close
+            name = get_tw_name(ticker)
+            if not name:
+                try:
+                    name = stock.info.get("shortName") or stock.info.get("longName") or ticker
+                except Exception:
+                    name = ticker
+            return {
+                "ticker": ticker,
+                "name": name,
+                "close": float(price),
+                "prev_close": float(prev) if prev else None,
+                "market": "TW",
+            }
+        except Exception:
+            continue
+    return {"ticker": ticker, "error": f"查無股票代號 {ticker}", "market": "TW"}
+
+
 async def fetch_taiwan_data(ticker: str) -> dict:
     """Fetch recent price data for a Taiwan stock from TWSE."""
     query_dates = _months_to_query(date.today())
@@ -114,7 +143,8 @@ async def fetch_taiwan_data(ticker: str) -> dict:
 
     all_rows = [row for monthly in reversed(results) for row in monthly]
     if not all_rows:
-        return {"ticker": ticker, "error": f"查無股票代號 {ticker}", "market": "TW"}
+        # TWSE 只有上市股票；上櫃（如 5274）改走 yfinance
+        return await asyncio.to_thread(_fetch_tw_via_yf, ticker)
 
     latest = all_rows[-1]
     prev = all_rows[-2] if len(all_rows) >= 2 else None

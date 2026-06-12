@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 from bot.auth import restrict_callback
 from bot.config import ALLOWED_TELEGRAM_ID
+from bot.handlers.messaging import reply_long, send_long
 from bot.handlers.pending import ask, register
 from bot.services.earnings import fetch_earnings_data
 from bot.services.earnings_watch import get_pending_announcements, mark_analyzed
@@ -132,7 +133,7 @@ async def earnings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(f"⏳ 正在查詢 {ticker} 財報資料...")
     try:
         result = await _run_earnings_analysis(ticker)
-        await update.message.reply_text(result)
+        await reply_long(update.message, result)
     except ValueError as e:
         await update.message.reply_text(f"❌ {e}")
     except Exception as e:
@@ -149,7 +150,7 @@ async def earnings_pick_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.edit_message_text(f"⏳ 正在查詢 {ticker} 財報資料...")
     try:
         result = await _run_earnings_analysis(ticker)
-        await query.message.reply_text(result)
+        await reply_long(query.message, result)
     except ValueError as e:
         await query.edit_message_text(f"❌ {e}")
     except Exception as e:
@@ -185,9 +186,10 @@ async def poll_earnings_announcements(context: ContextTypes.DEFAULT_TYPE) -> Non
 
                 analysis = await _run_earnings_analysis(ticker)
                 name = data.get("name", ticker)
-                await context.bot.send_message(
-                    chat_id=ALLOWED_TELEGRAM_ID,
-                    text=f"📋 {name}({ticker}) 財報公布！\n\n{analysis}",
+                await send_long(
+                    context.bot,
+                    ALLOWED_TELEGRAM_ID,
+                    f"📋 {name}({ticker}) 財報公布！\n\n{analysis}",
                 )
                 mark_analyzed(ticker)
             except Exception as e:

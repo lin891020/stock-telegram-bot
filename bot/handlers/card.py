@@ -11,8 +11,12 @@ from telegram.ext import ContextTypes, MessageHandler, CallbackQueryHandler, fil
 
 from bot.auth import restrict_callback
 from bot.handlers.alert import ask_alert_condition
+from bot.handlers.analyze import _analysis_keyboard
+from bot.handlers.earnings import _run_earnings_analysis
+from bot.handlers.messaging import reply_long
 from bot.handlers.pending import dispatch_pending
 from bot.services.recent import add_recent
+from bot.services.watchlist import add_ticker
 from bot.services.stock import (
     get_stock_summary, looks_like_ticker, search_ticker, is_taiwan_stock, clean_us_name,
 )
@@ -24,19 +28,20 @@ _MAX_QUERY_LEN = 20  # 超過就當聊天雜訊，不回應
 
 
 def _card_keyboard(ticker: str, name: str) -> InlineKeyboardMarkup:
-    wadd_prefix = f"wadd_{ticker}_"
-    budget = 64 - len(wadd_prefix.encode("utf-8"))
+    # 卡片專用 callback（cana_/cearn_/cadd_）：操作一律 reply 新訊息，卡片留在原地
+    cadd_prefix = f"cadd_{ticker}_"
+    budget = 64 - len(cadd_prefix.encode("utf-8"))
     safe_name = (name or ticker).encode("utf-8")[:budget].decode("utf-8", errors="ignore")
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📊 深度分析", callback_data=f"apick_{ticker}"),
+            InlineKeyboardButton("📊 深度分析", callback_data=f"cana_{ticker}"),
             InlineKeyboardButton("📈 K線", callback_data=f"chartp_{ticker}_6m"),
         ],
         [
-            InlineKeyboardButton("📋 財報", callback_data=f"epick_{ticker}"),
+            InlineKeyboardButton("📋 財報", callback_data=f"cearn_{ticker}"),
             InlineKeyboardButton("🔔 設提醒", callback_data=f"ahint_{ticker}"),
         ],
-        [InlineKeyboardButton("👀 加自選", callback_data=wadd_prefix + safe_name)],
+        [InlineKeyboardButton("👀 加自選", callback_data=cadd_prefix + safe_name)],
     ])
 
 
@@ -123,6 +128,50 @@ async def card_open_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 @restrict_callback
+async def card_analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """卡片的 📊：另發分析類型選單，卡片留著。"""
+    query = update.callback_query
+    await query.answer()
+    ticker = query.data[len("cana_"):]
+    await query.message.reply_text(
+        f"選擇 {ticker} 的分析類型：", reply_markup=_analysis_keyboard(ticker)
+    )
+
+
+@restrict_callback
+async def card_earnings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """卡片的 📋：另發財報分析，卡片留著。"""
+    query = update.callback_query
+    await query.answer()
+    ticker = query.data[len("cearn_"):]
+    status = await query.message.reply_text(f"⏳ 正在查詢 {ticker} 財報資料...")
+    try:
+        result = await _run_earnings_analysis(ticker)
+        await reply_long(query.message, result)
+        await status.delete()
+    except ValueError as e:
+        await status.edit_text(f"❌ {e}")
+    except Exception as e:
+        logger.error("card earnings failed for %s: %s", ticker, e, exc_info=True)
+        await status.edit_text("❌ 分析失敗，請稍後再試")
+
+
+@restrict_callback
+async def card_watch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """卡片的 👀：加入自選，卡片留著。"""
+    query = update.callback_query
+    parts = query.data[len("cadd_"):].split("_", 1)
+    ticker = parts[0]
+    name = parts[1] if len(parts) > 1 else ticker
+    if add_ticker(query.from_user.id, ticker, name):
+        await query.answer("已加入追蹤")
+        label = f"{name}({ticker})" if name and name != ticker else ticker
+        await query.message.reply_text(f"✅ 已加入追蹤：{label}")
+    else:
+        await query.answer("已在追蹤清單中", show_alert=False)
+
+
+@restrict_callback
 async def alert_hint_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """卡片的 🔔 按鈕：兩段式追問條件，回覆即設定。"""
     query = update.callback_query
@@ -136,5 +185,8 @@ def build_card_handlers(auth_filter):
     return [
         MessageHandler(filters.TEXT & ~filters.COMMAND & auth_filter, text_lookup_handler),
         CallbackQueryHandler(card_open_callback, pattern="^card_"),
+        CallbackQueryHandler(card_analyze_callback, pattern="^cana_"),
+        CallbackQueryHandler(card_earnings_callback, pattern="^cearn_"),
+        CallbackQueryHandler(card_watch_callback, pattern="^cadd_"),
         CallbackQueryHandler(alert_hint_callback, pattern="^ahint_"),
     ]

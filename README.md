@@ -114,8 +114,11 @@ python main.py
 |------|--------|------|------|
 | `claude-sonnet-4-6` | Anthropic | 付費 | 深度分析（預設） |
 | `claude-opus-4-8` | Anthropic | 付費 | 最強推理 |
-| `gemini-2.0-flash` | Google | 免費 | 快速輕量 |
+| `gemini-3.5-flash` | Google | 免費 | 快速輕量 |
+| `gemini-3.1-pro-preview` | Google | 免費（限額） | 深度推理 |
 | `gpt-4o-mini` | GitHub Models | 免費 | 穩定備援 |
+
+每日晨報的新聞摘要為低難度任務：使用 Anthropic 時自動改用 Haiku 以節省成本，免費模型則照常使用。
 
 ---
 

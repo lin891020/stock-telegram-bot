@@ -8,6 +8,7 @@ from telegram.ext import (
     CallbackQueryHandler, ConversationHandler, filters,
 )
 
+from bot.handlers.messaging import reply_long
 from bot.services.github_store import read_profile, write_profile
 from bot.services.llm import call_llm, ANTHROPIC_CHAT_MODEL
 
@@ -170,7 +171,7 @@ async def got_goal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     try:
         advice = await asyncio.to_thread(call_llm, _SYSTEM, user_msg, ANTHROPIC_CHAT_MODEL)
-        await query.message.reply_text(advice)
+        await reply_long(query.message, advice)
     except Exception as exc:
         logger.error("Finance advice generation failed: %s", exc)
         await query.message.reply_text(f"建議生成失敗：{exc}")
