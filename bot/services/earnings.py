@@ -18,17 +18,24 @@ def _safe_float(val) -> float | None:
 
 
 def _fetch_earnings_sync(ticker: str) -> dict:
-    yf_ticker = f"{ticker}.TW" if is_taiwan_stock(ticker) else ticker
-    try:
-        stock = yf.Ticker(yf_ticker)
-        info = stock.info or {}
-    except Exception as e:
-        return {"ticker": ticker, "error": f"查無股票代號 {ticker}（{e}）"}
+    # 台股先試上市（.TW）再試上櫃（.TWO）
+    candidates = [f"{ticker}.TW", f"{ticker}.TWO"] if is_taiwan_stock(ticker) else [ticker]
+    stock = None
+    info = {}
+    for yf_ticker in candidates:
+        try:
+            candidate = yf.Ticker(yf_ticker)
+            candidate_info = candidate.info or {}
+        except Exception:
+            continue
+        if candidate_info.get("longName") or candidate_info.get("currentPrice"):
+            stock, info = candidate, candidate_info
+            break
+
+    if stock is None:
+        return {"ticker": ticker, "error": f"查無股票代號 {ticker}，請確認是否正確（例如 Micron → MU）"}
 
     name = info.get("longName") or info.get("shortName") or ticker
-
-    if not info.get("longName") and not info.get("currentPrice"):
-        return {"ticker": ticker, "error": f"查無股票代號 {ticker}，請確認是否正確（例如 Micron → MU）"}
 
     # Next earnings date
     next_date = None
