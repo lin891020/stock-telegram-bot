@@ -8,10 +8,11 @@ anthropic = _anthropic
 
 # Model registry: key → (display_name, provider)
 AVAILABLE_MODELS: dict[str, tuple[str, str]] = {
-    "claude-opus-4-8":            ("Opus 4.8（付費，旗艦）",           "anthropic"),
-    "claude-sonnet-4-6":          ("Sonnet 4.6（付費，最強）",        "anthropic"),
-    "gemini-3.5-flash":           ("Gemini 3.5 Flash（免費，最強）",   "gemini"),
-    "gemini-3.1-pro-preview":     ("Gemini 3.1 Pro（免費，限額）",    "gemini"),
+    "claude-opus-4-8":            ("Opus 4.8（付費，最強推理）",       "anthropic"),
+    "claude-sonnet-4-6":          ("Sonnet 4.6（付費，高性價比）",     "anthropic"),
+    "claude-haiku-4-5-20251001":  ("Haiku 4.5（付費，最便宜）",       "anthropic"),
+    "gemini-3.5-flash":           ("Gemini 3.5 Flash（免費，快速）",   "gemini"),
+    "gemini-3.1-pro-preview":     ("Gemini 3.1 Pro（免費，深度）",    "gemini"),
     "gpt-4o-mini":               ("GPT-4o Mini（免費，穩定）",       "github"),
 }
 
