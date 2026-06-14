@@ -4,6 +4,7 @@ from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
 
 from bot.handlers.pending import ask, register
+from bot.services.formatting import quote_line
 from bot.services.stock import get_stock_summary, looks_like_ticker, search_ticker
 from bot.services.tw_stocks import has_chinese, search_tw_stocks
 
@@ -22,23 +23,7 @@ async def _resolve_symbol(query: str):
 
 
 def _format_price_line(ticker: str, data: dict) -> str:
-    price = data.get("price") or data.get("close")
-    prev = data.get("prev_close")
-    name = data.get("name", "")
-    label = f"{name}({ticker})" if name and name != ticker else ticker
-    currency = "元" if data.get("market") == "TW" else "USD"
-
-    if not price:
-        return f"{label}：無報價"
-
-    if prev and prev != 0:
-        change = price - prev
-        pct = change / prev * 100
-        arrow = "▲" if change >= 0 else "▼"
-        sign = "+" if change >= 0 else ""
-        return f"{label}\n收 {price:.2f} {currency}  {arrow} {sign}{pct:.2f}%（{sign}{change:.2f}）"
-
-    return f"{label}\n收 {price:.2f} {currency}"
+    return quote_line(ticker, data, multiline=True)
 
 
 async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

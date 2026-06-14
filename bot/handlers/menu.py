@@ -65,6 +65,7 @@ _HELP_TEXT = """\
 設定
 /settime 06:30 — 起床報時間；/settime tw 14:30 — 台股收盤速報
 /model — 切換 AI 模型（重啟後保留）
+/health — 檢查 yfinance / 台股 / AI 是否正常
 /help — 顯示此說明
 """
 

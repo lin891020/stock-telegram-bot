@@ -15,6 +15,7 @@ from bot.handlers.analyze import _analysis_keyboard
 from bot.handlers.earnings import _run_earnings_analysis
 from bot.handlers.messaging import reply_long
 from bot.handlers.pending import dispatch_pending
+from bot.services.formatting import quote_line
 from bot.services.recent import add_recent
 from bot.services.watchlist import add_ticker
 from bot.services.stock import (
@@ -46,20 +47,7 @@ def _card_keyboard(ticker: str, name: str) -> InlineKeyboardMarkup:
 
 
 def _card_text(ticker: str, data: dict) -> str:
-    name = data.get("name", "")
-    label = f"{name}({ticker})" if name and name != ticker else ticker
-    price = data.get("price") or data.get("close")
-    if not price:
-        return f"{label}\n無報價資料"
-    prev = data.get("prev_close")
-    currency = "元" if data.get("market") == "TW" else "USD"
-    line = f"{label}\n{price:,.2f} {currency}"
-    if prev:
-        pct = (price - prev) / prev * 100
-        arrow = "▲" if pct >= 0 else "▼"
-        sign = "+" if pct >= 0 else ""
-        line += f"  {arrow} {sign}{pct:.2f}%（{sign}{price - prev:.2f}）"
-    return line
+    return quote_line(ticker, data, multiline=True)
 
 
 async def send_stock_card(message, ticker: str) -> None:

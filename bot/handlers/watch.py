@@ -11,6 +11,7 @@ from bot.auth import restrict_callback
 from bot.handlers.messaging import send_long
 from bot.handlers.pending import ask, register
 from bot.services.watchlist import get_watchlist_with_names, get_watchlist, add_ticker, remove_ticker, _load
+from bot.services.formatting import quote_line
 from bot.services.market import fetch_market_summary
 from bot.services.news import fetch_and_summarize
 from bot.services.settings import get_time, set_time, get_news_time, parse_hhmm
@@ -53,23 +54,7 @@ def _build_watchlist_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
 
 
 def _format_closing_line(ticker: str, data: dict) -> str:
-    price = data.get("price") or data.get("close")
-    prev = data.get("prev_close")
-    name = data.get("name", "")
-    label = _label(ticker, name)
-    currency = "元" if data.get("market") == "TW" else "USD"
-
-    if not price:
-        return f"{label}  無資料"
-
-    if prev and prev != 0:
-        change = price - prev
-        pct = change / prev * 100
-        arrow = "▲" if change >= 0 else "▼"
-        sign = "+" if change >= 0 else ""
-        return f"{label}  收 {price:.2f} {currency}  {arrow} {sign}{pct:.2f}%（{sign}{change:.2f}）"
-
-    return f"{label}  收 {price:.2f} {currency}"
+    return quote_line(ticker, data)
 
 
 async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -323,6 +308,14 @@ async def send_daily_news(context: ContextTypes.DEFAULT_TYPE) -> None:
             )
         except Exception as e:
             logger.error("Daily news failed for user %s: %s", user_id_str, e, exc_info=True)
+            # 主動告知，否則使用者只會「咦今天沒收到晨報」而不知道掛了
+            try:
+                await context.bot.send_message(
+                    chat_id=int(user_id_str),
+                    text=f"⚠️ 今天 {today} 起床報抓取失敗（資料源可能暫時異常），可稍後用 /news 重試或 /health 檢查。",
+                )
+            except Exception:
+                pass
 
 
 async def send_closing_digest(context: ContextTypes.DEFAULT_TYPE, market: str) -> None:

@@ -20,6 +20,7 @@ from bot.handlers.alert import build_alert_handler, check_alerts
 from bot.handlers.card import build_card_handlers
 from bot.handlers.market import build_market_handler
 from bot.handlers.chart import build_chart_handler
+from bot.handlers.health import build_health_handler
 from bot.services.tw_stocks import load_tw_stock_list
 from bot.handlers.earnings import build_earnings_handler, poll_earnings_announcements
 
@@ -45,6 +46,7 @@ async def _post_init(application) -> None:
         BotCommand("learn",     "📚 學習投資觀念"),
         BotCommand("finance",   "💰 個人財務教練"),
         BotCommand("model",     "🤖 切換 AI 模型"),
+        BotCommand("health",    "🩺 檢查資料源狀態"),
         BotCommand("help",      "❓ 使用說明"),
     ])
 
@@ -55,6 +57,7 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", start_handler, filters=auth))
     app.add_handler(CommandHandler("help", help_handler, filters=auth))
+    app.add_handler(build_health_handler(auth))
     app.add_handler(CallbackQueryHandler(menu_callback_handler, pattern="^menu_"))
 
     for handler in build_analyze_handler(auth):
