@@ -16,7 +16,7 @@ from bot.handlers.watch import (
     schedule_tw_closing,
 )
 from bot.handlers.price import build_price_handler
-from bot.handlers.alert import build_alert_handler, check_alerts
+from bot.handlers.alert import build_alert_handler, check_alerts, check_big_moves
 from bot.handlers.card import build_card_handlers
 from bot.handlers.market import build_market_handler
 from bot.handlers.chart import build_chart_handler
@@ -98,8 +98,10 @@ def main() -> None:
 
     # 價格提醒：每 10 分鐘檢查（盤中才打 API）
     app.job_queue.run_repeating(check_alerts, interval=600, first=60, name="alert_check")
-    # 財報公布偵測：每 30 分鐘輪詢（無 pending 直接 return）
-    app.job_queue.run_repeating(poll_earnings_announcements, interval=1800, first=300, name="earnings_poll")
+    # 自選股異常波動：台股漲跌停、美股單日 ±10%，盤中每 10 分鐘檢查
+    app.job_queue.run_repeating(check_big_moves, interval=600, first=90, name="big_move_check")
+    # 財報公布偵測：每小時掃所有自選股（要打 yfinance，不宜太密）
+    app.job_queue.run_repeating(poll_earnings_announcements, interval=3600, first=120, name="earnings_poll")
 
     logging.getLogger(__name__).info("Bot started, polling...")
     app.run_polling()

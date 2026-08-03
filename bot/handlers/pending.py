@@ -1,12 +1,14 @@
 """兩段式輸入：指令不帶參數時 bot 追問，下一則文字當參數執行。
 
 Telegram 的指令按鈕一定直接送出（無法填入輸入框不送出），
-所以反過來讓 bot 用 ForceReply 開口問，使用者只需輸入參數本身。
+所以反過來讓 bot 開口問，使用者只需輸入參數本身。
+
+刻意不用 ForceReply：它會把輸入框鎖成「回覆某則訊息」的狀態，
+使用者得先解除才能打別的字。pending 狀態存在 user_data，
+下一則純文字自然會被 dispatch_pending 接走，不需要 Telegram 強制回覆。
 """
 import time
 import logging
-
-from telegram import ForceReply
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +27,13 @@ def register(action: str):
 
 
 async def ask(message, context, action: str, prompt: str, **extra) -> None:
-    """記下 pending action 並用 ForceReply 追問參數。"""
+    """記下 pending action 並追問參數（一般訊息，不鎖輸入框）。"""
     context.user_data["pending"] = {
         "action": action,
         "expires": time.monotonic() + _EXPIRY_SECONDS,
         **extra,
     }
-    await message.reply_text(prompt, reply_markup=ForceReply(selective=True))
+    await message.reply_text(prompt)
 
 
 def pop_pending(context):

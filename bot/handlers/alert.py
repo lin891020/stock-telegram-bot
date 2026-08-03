@@ -12,8 +12,10 @@ from bot.services.alerts import (
     parse_condition, describe_condition, condition_text, is_triggered,
     get_alerts, add_alert, remove_alert, all_alerts,
 )
+from bot.services.big_moves import classify_move, mark_sent, was_sent
 from bot.services.stock import is_taiwan_stock, looks_like_ticker
 from bot.services.tw_stocks import get_tw_name
+from bot.services.watchlist import _load as _load_watchlists
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +196,67 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
                 logger.error("alert push failed for %s: %s", alert["ticker"], e, exc_info=True)
     except Exception as e:
         logger.error("check_alerts failed: %s", e, exc_info=True)
+
+
+def _watchlist_targets(tw_open: bool, us_open: bool) -> list[tuple[str, str, str]]:
+    """(user_id_str, ticker, name)：自選股中所屬市場正在交易的標的。"""
+    targets = []
+    for user_id_str, raw in _load_watchlists().items():
+        items = raw.items() if isinstance(raw, dict) else [(t, t) for t in raw]
+        for ticker, name in items:
+            if tw_open if is_taiwan_stock(ticker) else us_open:
+                targets.append((user_id_str, ticker, name or ticker))
+    return targets
+
+
+async def check_big_moves(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """每 10 分鐘執行：自選股台股漲跌停、美股單日 ±10% 自動推播。
+
+    不需要 /alert 設定，加入自選股就會盯。同一天同一支同方向只推一次。
+    """
+    try:
+        taipei_now = datetime.now(timezone.utc) + timedelta(hours=_TAIPEI_UTC_OFFSET)
+        tw_open = _tw_market_open(taipei_now)
+        us_open = _us_market_open(taipei_now)
+        if not tw_open and not us_open:
+            return
+
+        targets = _watchlist_targets(tw_open, us_open)
+        if not targets:
+            return
+
+        tickers = sorted({t for _, t, _ in targets})
+        quotes = await asyncio.gather(
+            *[asyncio.to_thread(_fetch_quote_sync, t) for t in tickers]
+        )
+        quote_map = dict(zip(tickers, quotes))
+
+        for user_id_str, ticker, name in targets:
+            price, prev = quote_map.get(ticker, (None, None))
+            move = classify_move(ticker, price, prev)
+            if move is None or was_sent(user_id_str, ticker, move["direction"]):
+                continue
+            label = f"{name}({ticker})" if name and name != ticker else ticker
+            unit = "元" if is_taiwan_stock(ticker) else "USD"
+            arrow = "▲" if move["direction"] == "up" else "▼"
+            sign = "+" if move["pct"] >= 0 else ""
+            try:
+                await context.bot.send_message(
+                    chat_id=int(user_id_str),
+                    text=(
+                        f"🚨 {label} {move['headline']}\n"
+                        f"現價 {price:,.2f} {unit}  {arrow} {sign}{move['pct']:.2f}%\n"
+                        f"（前收 {prev:,.2f}）"
+                    ),
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("📊 查看", callback_data=f"card_{ticker}")
+                    ]]),
+                )
+                mark_sent(user_id_str, ticker, move["direction"])
+            except Exception as e:
+                logger.error("big move push failed for %s: %s", ticker, e, exc_info=True)
+    except Exception as e:
+        logger.error("check_big_moves failed: %s", e, exc_info=True)
 
 
 @restrict_callback

@@ -9,7 +9,7 @@ from bot.config import ALLOWED_TELEGRAM_ID
 from bot.handlers.messaging import reply_long, send_long
 from bot.handlers.pending import ask, register
 from bot.services.earnings import fetch_earnings_data
-from bot.services.earnings_watch import get_pending_announcements, mark_analyzed
+from bot.services.earnings_watch import all_watchlist_tickers, detect_new_report, prune_state
 from bot.services.llm import call_llm
 from bot.services.stock import looks_like_ticker, search_ticker, is_taiwan_stock
 from bot.services.tw_stocks import search_tw_stocks, has_chinese
@@ -82,9 +82,13 @@ def _build_quarters_block(quarters: list[dict], ticker: str = "") -> str:
     return "\n".join(lines)
 
 
-async def _run_earnings_analysis(ticker: str) -> str:
-    """Fetch earnings data and return LLM analysis text, or raise on error."""
-    data = await fetch_earnings_data(ticker)
+async def _run_earnings_analysis(ticker: str, data: dict | None = None) -> str:
+    """Fetch earnings data and return LLM analysis text, or raise on error.
+
+    已經抓過資料的呼叫端（例如公布偵測 job）可以直接傳進來，省一次 API。
+    """
+    if data is None:
+        data = await fetch_earnings_data(ticker)
     if data.get("error"):
         raise ValueError(data["error"])
 
@@ -165,33 +169,33 @@ async def _pending_earnings(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 
 async def poll_earnings_announcements(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """每 30 分鐘執行：偵測財報公布（出現實際 EPS）後推送一次分析。"""
-    try:
-        pending = get_pending_announcements()
-        if not pending:
-            return
+    """定時執行：掃所有自選股，偵測到新一季實際 EPS 就推送一次分析。
 
-        for ticker, entry in pending.items():
+    不需要事前登記；第一次看到某支股票只記基準、不推播（見 earnings_watch）。
+    """
+    try:
+        tickers = all_watchlist_tickers()
+        if not tickers:
+            return
+        prune_state(tickers)
+
+        for ticker in tickers:
             try:
                 data = await fetch_earnings_data(ticker)
                 if data.get("error"):
                     continue
-                # ISO 日期字串可直接比大小：預期日（含）之後出現實際 EPS 即視為已公布
-                announced = any(
-                    q.get("eps_actual") is not None and q.get("date", "") >= entry["date"]
-                    for q in data.get("quarters", [])
-                )
-                if not announced:
+
+                new_date = detect_new_report(ticker, data)
+                if not new_date:
                     continue
 
-                analysis = await _run_earnings_analysis(ticker)
+                analysis = await _run_earnings_analysis(ticker, data)
                 name = data.get("name", ticker)
                 await send_long(
                     context.bot,
                     ALLOWED_TELEGRAM_ID,
-                    f"📋 {name}({ticker}) 財報公布！\n\n{analysis}",
+                    f"📋 {name}({ticker}) 財報公布！（{new_date}）\n\n{analysis}",
                 )
-                mark_analyzed(ticker)
             except Exception as e:
                 logger.error("earnings announcement push failed for %s: %s", ticker, e, exc_info=True)
     except Exception as e:
