@@ -41,6 +41,21 @@ def _price_line(ticker: str, stock_data: dict) -> str:
     return f"{label}  {price:,.2f}  {arrow} {sign}{pct:.2f}%{warn}"
 
 
+def _price_overview(tw: list[str], us: list[str], prices: dict) -> str:
+    """行情總覽：台股、美股分兩區塊。只有單一市場時不加標題（避免多餘的一行）。"""
+    groups = [("🇹🇼 台股", tw), ("🇺🇸 美股", us)]
+    show_headers = bool(tw) and bool(us)
+
+    sections = []
+    for header, tickers in groups:
+        if not tickers:
+            continue
+        lines = "\n".join(_price_line(t, prices.get(t, {})) for t in tickers)
+        sections.append(f"{header}\n{html.escape(lines)}" if show_headers else html.escape(lines))
+
+    return "💼 自選股行情\n\n" + "\n\n".join(sections)
+
+
 _48H = 48 * 3600
 
 
@@ -135,7 +150,10 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
         pct = _day_pct(prices.get(t, {}))
         return -abs(pct) if pct is not None else 0.0
 
-    ordered = sorted(tickers, key=_sort_key)
+    # 台股、美股分開排序（各自異動大的排前面），總覽與重點分析都照這個順序
+    ordered_tw = sorted((t for t in tickers if is_taiwan_stock(t)), key=_sort_key)
+    ordered_us = sorted((t for t in tickers if not is_taiwan_stock(t)), key=_sort_key)
+    ordered = ordered_tw + ordered_us
 
     def _label(t: str) -> str:
         data = prices.get(t, {})
@@ -151,8 +169,7 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
 
     parts = []
 
-    price_block = "\n".join(_price_line(t, prices.get(t, {})) for t in ordered)
-    parts.append(f"💼 自選股行情\n{html.escape(price_block)}")
+    parts.append(_price_overview(ordered_tw, ordered_us, prices))
 
     if active:
         today = date.today().strftime("%Y/%m/%d")
