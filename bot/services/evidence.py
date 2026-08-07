@@ -102,13 +102,25 @@ class Evidence:
 
         grouped: dict[str, list[str]] = {}
         for fact in self.facts.values():
-            grouped.setdefault(fact.get("group", "其他"), []).append(
-                f"- {fact['label']}：{fact['display']}　[來源：{fact['source']}]"
-            )
+            period = fact.get("period") or ""
+            head = f"- {fact['label']}"
+            if period:
+                head += f"（{period}）"
+            head += f"：{fact['display']}　[來源：{fact['source']}]"
+            if fact.get("definition"):
+                head += f"\n    ※ {fact['definition']}"
+            grouped.setdefault(fact.get("group", "其他"), []).append(head)
         for group, items in grouped.items():
             lines.append("")
             lines.append(f"【{group}】")
             lines.extend(items)
+
+        lines.append("")
+        lines.append(
+            "期間規則：括號內是該數字涵蓋的期間。不同期間的數字不得直接相比，"
+            "也不得把某期間的比率安到另一期間的絕對值上"
+            "（例如把單季年增率說成年度成長率）。引用時必須連期間一起寫出來。"
+        )
 
         lines.append("")
         lines.append("=== 本次無法取得的資料 ===")
@@ -173,6 +185,7 @@ def build_evidence(
             "label": "公司名稱",
             "display": name,
             "source": "TWSE" if stock_data.get("market") == "TW" else "yfinance",
+            "period": "",
             "group": "標的識別",
         }
     else:
@@ -186,35 +199,38 @@ def build_evidence(
             "label": "最新股價",
             "display": _quote_display(stock_data),
             "source": "TWSE" if stock_data.get("market") == "TW" else "yfinance",
+            "period": str(stock_data.get("date") or "最新交易日"),
             "group": "即時報價",
         }
-        if stock_data.get("date"):
-            ev.facts["quote_date"] = {
-                "label": "報價日期",
-                "display": str(stock_data["date"]),
-                "source": "TWSE" if stock_data.get("market") == "TW" else "yfinance",
-                "group": "即時報價",
-            }
-
     fin_error = financials.get("error")
     if fin_error:
         ev.notes.append(f"財務報表抓取失敗：{fin_error}")
     else:
         annual = financials.get("annual") or {}
         quarterly = financials.get("quarterly") or {}
-        source = "FinMind" if financials.get("market") == "TW" else "yfinance"
+        is_tw = financials.get("market") == "TW"
+        source = "FinMind" if is_tw else "yfinance"
+        # 兩條路徑的年度數字來源不同，註記不能共用一句
+        annual_note = (
+            "損益與現金流為該年度各季加總；資產負債為該年度最新一期"
+            if is_tw else
+            "資料源直接提供的年報數字，未經加總"
+        )
         if any(annual.values()):
             ev.facts[FIN_ANNUAL] = {
-                "label": "年度財報（近 3 年）",
+                "label": "年度財報",
                 "display": _format_financial_block(annual),
                 "source": source,
+                "period": "各年度，鍵名標明是否為完整年度",
+                "definition": annual_note,
                 "group": "財務報表",
             }
         if any(quarterly.values()):
             ev.facts[FIN_QUARTERLY] = {
-                "label": "季度財報（近 4 季）",
+                "label": "季度財報",
                 "display": _format_quarterly_block(quarterly),
                 "source": source,
+                "period": "近 4 季，各季單季數、非累計",
                 "group": "財務報表",
             }
 

@@ -46,7 +46,7 @@ def test_facts_carry_source():
     assert ev.has(QUOTE) and ev.has(FIN_ANNUAL) and ev.has("trailingPE")
     prompt = ev.to_prompt()
     assert "[來源：yfinance]" in prompt
-    assert "本益比（TTM）：33.69" in prompt
+    assert "本益比（TTM／近 12 個月）：33.69" in prompt
 
 
 def test_unavailable_requirements_always_reported_missing():
@@ -144,3 +144,29 @@ def test_debt_label_is_not_total_liabilities():
     label = metrics["totalDebt"]["label"]
     assert "有息負債" in label
     assert label != "總負債"
+
+
+def test_metrics_carry_period_and_definition():
+    """每個指標都要能回答「哪段期間」「到底是什麼」。"""
+    metrics, _ = extract_metrics({"revenueGrowth": 0.164, "totalDebt": 84_344_000_000})
+    assert metrics["revenueGrowth"]["period"] == "最近一季 YoY"
+    # 實測 AAPL：單季年增 16.40% 被寫成年度成長，實際年度只有 6.43%
+    assert "不是年度成長率" in metrics["revenueGrowth"]["definition"]
+    assert "總負債" in metrics["totalDebt"]["definition"]
+
+
+def test_every_spec_declares_a_period_field():
+    from bot.services.metrics import METRIC_SPECS
+    for key, spec in METRIC_SPECS.items():
+        assert isinstance(spec.period, str), key
+        assert spec.label, key
+
+
+def test_prompt_forbids_cross_period_comparison():
+    assert "不同期間的數字不得直接相比" in _ev("full").to_prompt()
+
+
+def test_period_rendered_without_nested_parens():
+    prompt = _ev("valuation").to_prompt()
+    assert "（TTM／近 12 個月）" in prompt
+    assert "））" not in prompt
