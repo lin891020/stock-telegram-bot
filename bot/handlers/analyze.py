@@ -8,7 +8,9 @@ from bot.auth import restrict_callback
 from bot.handlers.pending import ask, register
 from bot.services.stock import get_stock_summary, looks_like_ticker, search_ticker, is_taiwan_stock, clean_us_name
 from bot.services.tw_stocks import has_chinese, search_tw_stocks
-from bot.services.financials import get_financials, format_financials_for_prompt
+from bot.services.financials import get_financials
+from bot.services.evidence import build_evidence
+from bot.services.metrics import fetch_key_metrics
 from bot.services.llm import call_llm
 from bot.services.pdf import generate_pdf
 from bot.prompts.analysis import PROMPTS, ANALYSIS_BUTTONS
@@ -119,9 +121,10 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.edit_message_text(f"⏳ 正在抓取 {ticker} 股價與財務數據...")
 
     try:
-        stock_data, financials = await asyncio.gather(
+        stock_data, financials, metrics = await asyncio.gather(
             get_stock_summary(ticker),
             get_financials(ticker),
+            fetch_key_metrics(ticker),
         )
 
         if isinstance(stock_data, dict) and stock_data.get("error"):
@@ -130,10 +133,15 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         await query.edit_message_text(f"⏳ AI 正在生成 {ticker} — {label} 報告，請稍候...")
 
-        financials_text = format_financials_for_prompt(financials)
+        # 證據包負責「有什麼」與「缺什麼」，兩者都由程式決定而非模型自陳
+        evidence = build_evidence(ticker, analysis_key, stock_data, financials, metrics)
         prompt = PROMPTS[analysis_key].format(ticker=ticker)
         current_date = date.today().strftime("%Y年%m月%d日")
-        user_msg = f"今天日期：{current_date}\n\n即時股價資料：\n{stock_data}\n\n{financials_text}\n\n{prompt}"
+        user_msg = f"今天日期：{current_date}\n\n{evidence.to_prompt()}\n\n{prompt}"
+        logger.info(
+            "analyze %s/%s: %d 項事實，%d 項缺漏",
+            ticker, analysis_key, len(evidence.facts), len(evidence.missing),
+        )
 
         content = await asyncio.to_thread(call_llm, _SYSTEM, user_msg)
 

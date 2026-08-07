@@ -188,7 +188,13 @@ async def get_financials(ticker: str) -> dict:
 def format_financials_for_prompt(data: dict) -> str:
     """Convert financials dict to a readable string for the LLM prompt."""
     if "error" in data:
-        return f"⚠️ 財務數據抓取失敗（{data['error']}），以下分析基於模型訓練資料，請自行驗證數字。"
+        # 這裡以前寫「以下分析基於模型訓練資料」——等於明文授權模型拿舊記憶當現況。
+        # 抓不到就是抓不到，不給任何編造的空間。
+        return (
+            f"⚠️ 財務數據抓取失敗（{data['error']}）。\n"
+            "本次沒有任何財務報表數據可用。嚴禁使用你訓練資料中的財務數字，"
+            "所有需要財報數據的章節請整段略過並列入缺漏清單。"
+        )
 
     market = data.get("market", "")
     ticker = data.get("ticker", "")
