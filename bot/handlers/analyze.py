@@ -121,7 +121,7 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.edit_message_text(f"⏳ 正在抓取 {ticker} 股價與財務數據...")
 
     try:
-        stock_data, financials, metrics = await asyncio.gather(
+        stock_data, financials, (metrics, anomalies) = await asyncio.gather(
             get_stock_summary(ticker),
             get_financials(ticker),
             fetch_key_metrics(ticker),
@@ -134,7 +134,7 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.edit_message_text(f"⏳ AI 正在生成 {ticker} — {label} 報告，請稍候...")
 
         # 證據包負責「有什麼」與「缺什麼」，兩者都由程式決定而非模型自陳
-        evidence = build_evidence(ticker, analysis_key, stock_data, financials, metrics)
+        evidence = build_evidence(ticker, analysis_key, stock_data, financials, metrics, anomalies)
         prompt = PROMPTS[analysis_key].format(ticker=ticker)
         current_date = date.today().strftime("%Y年%m月%d日")
         user_msg = f"今天日期：{current_date}\n\n{evidence.to_prompt()}\n\n{prompt}"

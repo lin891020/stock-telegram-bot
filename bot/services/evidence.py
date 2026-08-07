@@ -29,7 +29,8 @@ _COMMON: list[_Requirement] = [
 REQUIREMENTS: dict[str, list[_Requirement]] = {
     "full": _COMMON + [
         ("季度財務報表", (FIN_QUARTERLY,)),
-        ("獲利能力指標（毛利率、營益率、淨利率、ROE）", ("grossMargins", "returnOnEquity")),
+        ("獲利能力指標（毛利率、營益率、淨利率）", ("grossMargins", "operatingMargins", "profitMargins")),
+        ("股東權益報酬率（ROE）", ("returnOnEquity",)),
         ("估值指標（本益比、P/S、P/B）", ("trailingPE", "priceToBook")),
         ("分析師目標價與共識評級", ("targetMeanPrice", "recommendationKey")),
         ("同業估值對照數據", ()),
@@ -37,8 +38,10 @@ REQUIREMENTS: dict[str, list[_Requirement]] = {
     ],
     "financial": _COMMON + [
         ("季度財務報表", (FIN_QUARTERLY,)),
-        ("獲利能力指標（毛利率、營益率、淨利率、ROE）", ("grossMargins", "returnOnEquity")),
-        ("現金與負債部位", ("totalCash", "totalDebt")),
+        ("獲利能力指標（毛利率、營益率、淨利率）", ("grossMargins", "operatingMargins", "profitMargins")),
+        ("股東權益報酬率（ROE）", ("returnOnEquity",)),
+        ("完整負債結構（totalDebt 僅含借款，非總負債）", (FIN_ANNUAL,)),
+        ("現金與借款部位", ("totalCash", "totalDebt")),
         ("自由現金流", ("freeCashflow",)),
         ("同業財務體質對照數據", ()),
     ],
@@ -151,9 +154,12 @@ def build_evidence(
     stock_data: dict | None,
     financials: dict | None,
     metrics: dict[str, dict] | None,
+    anomalies: list[str] | None = None,
 ) -> Evidence:
     """組裝證據包並算出缺漏。缺漏是程式判定的，不經過模型。"""
     ev = Evidence(ticker=ticker)
+    for anomaly in anomalies or []:
+        ev.notes.append(f"資料源異常，已剔除相關指標：{anomaly}")
 
     stock_data = stock_data if isinstance(stock_data, dict) else {}
     financials = financials if isinstance(financials, dict) else {}

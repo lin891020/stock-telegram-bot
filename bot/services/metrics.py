@@ -36,8 +36,11 @@ METRIC_SPECS: dict[str, tuple[str, str]] = {
     "numberOfAnalystOpinions": ("涵蓋分析師人數", "int"),
     "recommendationKey": ("分析師共識評級", "text"),
     "freeCashflow": ("自由現金流", "money"),
-    "totalDebt": ("總負債", "money"),
-    "totalCash": ("現金及約當現金", "money"),
+    # 這兩個欄位以前標成「總負債」「現金及約當現金」，兩個都錯：
+    # totalDebt 只含借款（AAPL 843 億，實際總負債 2,855 億，差 3.4 倍），
+    # totalCash 含短期投資。標錯會讓模型算出假的「淨現金部位」並據此說財務穩健。
+    "totalDebt": ("有息負債（借款總額，不含應付帳款等其他負債）", "money"),
+    "totalCash": ("現金及約當現金＋短期投資", "money"),
     "sector": ("產業（大類）", "text"),
     "industry": ("產業（細類）", "text"),
 }
@@ -77,12 +80,50 @@ def _fetch_info_sync(ticker: str) -> dict:
     return {}
 
 
-def extract_metrics(info: dict) -> dict[str, dict]:
-    """從 info 挑出關鍵指標。缺的欄位直接不放進來（不填 N/A、不補預設值）。"""
+# 會計恆等關係：毛利率 ≥ 營業利益率 ≥ 淨利率（同期間）
+_MARGIN_CHAIN = [
+    ("grossMargins", "毛利率"),
+    ("operatingMargins", "營業利益率"),
+    ("profitMargins", "淨利率"),
+]
+
+
+def check_margin_consistency(info: dict) -> list[str]:
+    """檢查利潤率是否自相矛盾。
+
+    毛利率一定 ≥ 營益率 ≥ 淨利率，這是定義決定的。違反就代表資料源
+    的期間口徑不一致（實測 2408：營益率 73.68% > 毛利率 64.91%）。
+    這種矛盾要由程式擋，不能指望模型看出來——它會照抄。
+    """
+    chain = []
+    for key, label in _MARGIN_CHAIN:
+        value = info.get(key)
+        if isinstance(value, (int, float)):
+            chain.append((label, float(value)))
+
+    problems = []
+    for (upper_label, upper), (lower_label, lower) in zip(chain, chain[1:]):
+        if lower > upper:
+            problems.append(
+                f"{lower_label}（{lower * 100:.2f}%）高於 {upper_label}（{upper * 100:.2f}%），"
+                "違反會計恆等關係，代表資料源期間口徑不一致，本次全部利潤率均不採用"
+            )
+    return problems
+
+
+def extract_metrics(info: dict) -> tuple[dict[str, dict], list[str]]:
+    """挑出關鍵指標並做一致性檢查。
+
+    回傳 (指標, 異常說明)。缺的欄位不放進來（不填 N/A、不補預設值）；
+    自相矛盾的利潤率整組剔除——分不出哪個錯時，一個都不能用。
+    """
+    anomalies = check_margin_consistency(info)
+    dropped = {k for k, _ in _MARGIN_CHAIN} if anomalies else set()
+
     metrics = {}
     for key, (label, kind) in METRIC_SPECS.items():
         value = info.get(key)
-        if value is None or value == "" or value == {}:
+        if value is None or value == "" or value == {} or key in dropped:
             continue
         metrics[key] = {
             "label": label,
@@ -90,9 +131,9 @@ def extract_metrics(info: dict) -> dict[str, dict]:
             "display": format_metric(value, kind),
             "source": SOURCE,
         }
-    return metrics
+    return metrics, anomalies
 
 
-async def fetch_key_metrics(ticker: str) -> dict[str, dict]:
+async def fetch_key_metrics(ticker: str) -> tuple[dict[str, dict], list[str]]:
     info = await asyncio.to_thread(_fetch_info_sync, ticker)
     return extract_metrics(info)

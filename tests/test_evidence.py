@@ -3,7 +3,7 @@ import pytest
 from bot.services.evidence import (
     FIN_ANNUAL, QUOTE, REQUIREMENTS, SUBJECTIVE_NOTES, build_evidence,
 )
-from bot.services.metrics import extract_metrics, format_metric
+from bot.services.metrics import check_margin_consistency, extract_metrics, format_metric
 
 STOCK = {"name": "NVIDIA", "price": 206.64, "prev_close": 200.76, "market": "US", "date": "2026-08-04"}
 FIN = {
@@ -20,7 +20,8 @@ INFO = {
 
 
 def _ev(key, stock=STOCK, fin=FIN, info=INFO):
-    return build_evidence("NVDA", key, stock, fin, extract_metrics(info))
+    metrics, anomalies = extract_metrics(info)
+    return build_evidence("NVDA", key, stock, fin, metrics, anomalies)
 
 
 def test_format_metric_kinds():
@@ -32,12 +33,12 @@ def test_format_metric_kinds():
 
 
 def test_extract_metrics_skips_absent_fields():
-    m = extract_metrics({"trailingPE": 33.686})
+    m, _ = extract_metrics({"trailingPE": 33.686})
     assert set(m) == {"trailingPE"}
     assert m["trailingPE"]["display"] == "33.69"
     assert m["trailingPE"]["source"] == "yfinance"
     # 缺的欄位不補 N/A、不補預設值
-    assert "targetMeanPrice" not in extract_metrics({})
+    assert "targetMeanPrice" not in extract_metrics({})[0]
 
 
 def test_facts_carry_source():
@@ -84,13 +85,13 @@ def test_moat_has_no_quantitative_source():
 
 
 def test_prompt_states_when_nothing_missing():
-    ev = build_evidence("NVDA", "unknown_key", STOCK, FIN, extract_metrics(INFO))
+    ev = build_evidence("NVDA", "unknown_key", STOCK, FIN, extract_metrics(INFO)[0])
     assert ev.missing == []
     assert "本次所需資料齊全" in ev.to_prompt()
 
 
 def test_missing_block_empty_when_complete():
-    ev = build_evidence("NVDA", "unknown_key", STOCK, FIN, extract_metrics(INFO))
+    ev = build_evidence("NVDA", "unknown_key", STOCK, FIN, extract_metrics(INFO)[0])
     assert ev.missing_block() == ""
     assert "本次無法取得" in _ev("valuation").missing_block()
 
@@ -105,3 +106,41 @@ def test_every_analysis_type_declares_requirements(key):
 
 def test_subjective_keys_are_known_analysis_types():
     assert set(SUBJECTIVE_NOTES) <= set(REQUIREMENTS)
+
+
+def test_inconsistent_margins_are_dropped_wholesale():
+    """實測 2408：營益率 73.68% > 毛利率 64.91%，會計上不可能。
+    分不出哪個錯，就一個都不能用。"""
+    bad = {"grossMargins": 0.64911, "operatingMargins": 0.73685, "profitMargins": 0.49254}
+    problems = check_margin_consistency(bad)
+    assert problems and "違反會計恆等關係" in problems[0]
+    metrics, anomalies = extract_metrics({**INFO, **bad})
+    assert not {"grossMargins", "operatingMargins", "profitMargins"} & set(metrics)
+    assert anomalies
+    # 其他指標不受牽連
+    assert "trailingPE" in metrics
+
+
+def test_consistent_margins_are_kept():
+    good = {"grossMargins": 0.48653, "operatingMargins": 0.32623, "profitMargins": 0.27619}
+    assert check_margin_consistency(good) == []
+    metrics, anomalies = extract_metrics(good)
+    assert set(metrics) == set(good)
+    assert anomalies == []
+
+
+def test_anomalies_surface_as_notes():
+    bad = {"grossMargins": 0.64911, "operatingMargins": 0.73685}
+    metrics, anomalies = extract_metrics({**INFO, **bad})
+    ev = build_evidence("2408", "financial", STOCK, FIN, metrics, anomalies)
+    assert any("資料源異常" in n for n in ev.notes)
+    # 利潤率被剔除 → 需求落入缺漏
+    assert any("獲利能力指標" in m for m in ev.missing)
+
+
+def test_debt_label_is_not_total_liabilities():
+    """totalDebt 只是借款，標成「總負債」會讓模型算出假的淨現金部位。"""
+    metrics, _ = extract_metrics({"totalDebt": 84_344_000_000})
+    label = metrics["totalDebt"]["label"]
+    assert "有息負債" in label
+    assert label != "總負債"
