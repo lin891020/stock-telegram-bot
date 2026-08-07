@@ -29,15 +29,54 @@ async def _finmind_get(client: httpx.AsyncClient, dataset: str, stock_id: str, s
         return []
 
 
-def _annual_summary(rows: list, value_col: str, label_col: str = "date") -> dict:
-    """Group rows by year and return the latest entry per year (up to 3 years)."""
-    by_year: dict[str, dict] = {}
+def _to_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _by_year(rows: list, value_col: str, label_col: str) -> dict[str, list[tuple[str, float]]]:
+    grouped: dict[str, list[tuple[str, float]]] = {}
     for row in rows:
-        year = str(row.get(label_col, ""))[:4]
-        if year:
-            by_year[year] = row
-    recent_years = sorted(by_year.keys(), reverse=True)[:3]
-    return {y: by_year[y].get(value_col) for y in sorted(recent_years)}
+        stamp = str(row.get(label_col, ""))
+        value = _to_float(row.get(value_col))
+        if len(stamp) >= 4 and value is not None:
+            grouped.setdefault(stamp[:4], []).append((stamp, value))
+    return grouped
+
+
+def _recent_years(grouped: dict, limit: int = 3) -> list[str]:
+    return sorted(sorted(grouped, reverse=True)[:limit])
+
+
+def _annual_flow(rows: list, value_col: str, label_col: str = "date") -> dict:
+    """流量項目（營收、淨利、現金流）：同年度的季報**加總**才是年度數字。
+
+    FinMind 回傳的是單季數字。這裡以前直接取「每年最後一筆」當年度值，
+    等於拿某一季冒充整年——實測讓模型拿 2024Q4 比 2026Q2，
+    算出「三年成長 12.56 倍」的假成長。年度不齊時在鍵名標明季數。
+    """
+    grouped = _by_year(rows, value_col, label_col)
+    result = {}
+    for year in _recent_years(grouped):
+        quarters = grouped[year]
+        total = sum(v for _, v in quarters)
+        # 不寫「前 N 季」——缺的可能是任何一季，只保證「這不是全年」
+        label = year if len(quarters) >= 4 else f"{year}（僅 {len(quarters)} 季合計，非全年）"
+        result[label] = total
+    return result
+
+
+def _annual_point(rows: list, value_col: str, label_col: str = "date") -> dict:
+    """存量項目（總資產、負債、權益）：取每年最新一期即可，不能加總。"""
+    grouped = _by_year(rows, value_col, label_col)
+    result = {}
+    for year in _recent_years(grouped):
+        stamp, value = max(grouped[year], key=lambda x: x[0])
+        label = year if stamp[5:10] == "12-31" else f"{year}（截至 {stamp[5:10]}）"
+        result[label] = value
+    return result
 
 
 def _quarterly_rows(rows: list, date_col: str = "date") -> list:
@@ -63,25 +102,28 @@ async def fetch_taiwan_financials(ticker: str) -> dict:
     if not income_annual and not balance_annual:
         return {"error": f"FinMind 無法取得 {ticker} 財報資料"}
 
-    def extract_metric(rows: list, type_val: str, value_col: str = "value") -> dict:
-        filtered = [r for r in rows if r.get("type") == type_val]
-        return _annual_summary(filtered, value_col)
+    def extract_flow(rows: list, type_val: str, value_col: str = "value") -> dict:
+        return _annual_flow([r for r in rows if r.get("type") == type_val], value_col)
+
+    def extract_point(rows: list, type_val: str, value_col: str = "value") -> dict:
+        return _annual_point([r for r in rows if r.get("type") == type_val], value_col)
 
     def extract_metric_quarterly(rows: list, type_val: str, value_col: str = "value") -> list:
         filtered = [r for r in rows if r.get("type") == type_val]
         return _quarterly_rows(filtered)
 
-    revenue_annual = extract_metric(income_annual, "Revenue")
-    net_income_annual = extract_metric(income_annual, "NetIncome")
-    gross_profit_annual = extract_metric(income_annual, "GrossProfit")
-    operating_income_annual = extract_metric(income_annual, "OperatingIncome")
+    # 損益與現金流是流量 → 加總；資產負債是存量 → 取最新一期
+    revenue_annual = extract_flow(income_annual, "Revenue")
+    net_income_annual = extract_flow(income_annual, "NetIncome")
+    gross_profit_annual = extract_flow(income_annual, "GrossProfit")
+    operating_income_annual = extract_flow(income_annual, "OperatingIncome")
 
-    total_assets = extract_metric(balance_annual, "TotalAssets")
-    total_liabilities = extract_metric(balance_annual, "TotalLiabilities")
-    equity = extract_metric(balance_annual, "StockholdersEquity")
+    total_assets = extract_point(balance_annual, "TotalAssets")
+    total_liabilities = extract_point(balance_annual, "TotalLiabilities")
+    equity = extract_point(balance_annual, "StockholdersEquity")
 
-    operating_cf = extract_metric(cashflow_annual, "CashFlowsFromOperatingActivities")
-    capex = extract_metric(cashflow_annual, "AcquisitionOfPropertyPlantAndEquipment")
+    operating_cf = extract_flow(cashflow_annual, "CashFlowsFromOperatingActivities")
+    capex = extract_flow(cashflow_annual, "AcquisitionOfPropertyPlantAndEquipment")
 
     revenue_q = extract_metric_quarterly(income_quarterly, "Revenue")
     net_income_q = extract_metric_quarterly(income_quarterly, "NetIncome")

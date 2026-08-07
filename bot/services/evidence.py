@@ -15,11 +15,13 @@ from dataclasses import dataclass, field
 _Requirement = tuple[str, tuple[str, ...]]
 
 # 合成 key（非 yfinance 欄位），代表某一整塊資料是否到手
+NAME = "company_name"
 QUOTE = "quote"
 FIN_ANNUAL = "financials_annual"
 FIN_QUARTERLY = "financials_quarterly"
 
 _COMMON: list[_Requirement] = [
+    ("標的公司名稱", (NAME,)),
     ("即時股價", (QUOTE,)),
     ("年度財務報表", (FIN_ANNUAL,)),
 ]
@@ -156,6 +158,22 @@ def build_evidence(
     stock_data = stock_data if isinstance(stock_data, dict) else {}
     financials = financials if isinstance(financials, dict) else {}
     metrics = metrics or {}
+
+    # 公司名稱必須是事實。少了它，模型只拿到「2408」四個數字，
+    # 只能從記憶猜公司——實測它把南亞科(2408)猜成聯電(2303)，整份報告寫錯公司。
+    name = stock_data.get("name") or ""
+    if name and name != ticker:
+        ev.facts[NAME] = {
+            "label": "公司名稱",
+            "display": name,
+            "source": "TWSE" if stock_data.get("market") == "TW" else "yfinance",
+            "group": "標的識別",
+        }
+    else:
+        ev.missing.append(
+            f"代號 {ticker} 對應的公司名稱（不得自行推測是哪一家公司，"
+            "若無法確認標的身分，請直接說明無法分析）"
+        )
 
     if stock_data and not stock_data.get("error"):
         ev.facts[QUOTE] = {
