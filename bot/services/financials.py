@@ -114,7 +114,8 @@ async def fetch_taiwan_financials(ticker: str) -> dict:
 
     # 損益與現金流是流量 → 加總；資產負債是存量 → 取最新一期
     revenue_annual = extract_flow(income_annual, "Revenue")
-    net_income_annual = extract_flow(income_annual, "NetIncome")
+    # FinMind 沒有 NetIncome 這個型別，用錯名字會靜默回空——台股年度淨利一直是缺的
+    net_income_annual = extract_flow(income_annual, "IncomeAfterTaxes")
     gross_profit_annual = extract_flow(income_annual, "GrossProfit")
     operating_income_annual = extract_flow(income_annual, "OperatingIncome")
 
@@ -122,11 +123,21 @@ async def fetch_taiwan_financials(ticker: str) -> dict:
     total_liabilities = extract_point(balance_annual, "TotalLiabilities")
     equity = extract_point(balance_annual, "StockholdersEquity")
 
+    # 費用與稅務科目：少了它們，模型看到「淨利突然掉一個數量級」只能寫「無法判斷」。
+    # 實測 META 2025Q3 淨利 27 億的原因就是當季所得稅 190 億，答案只差一行。
+    cost_of_goods = extract_flow(income_annual, "CostOfGoodsSold")
+    operating_expenses = extract_flow(income_annual, "OperatingExpenses")
+    pretax_income = extract_flow(income_annual, "PreTaxIncome")
+    tax = extract_flow(income_annual, "TAX")
+    eps = extract_flow(income_annual, "EPS")
+
     operating_cf = extract_flow(cashflow_annual, "CashFlowsFromOperatingActivities")
     capex = extract_flow(cashflow_annual, "AcquisitionOfPropertyPlantAndEquipment")
 
     revenue_q = extract_metric_quarterly(income_quarterly, "Revenue")
-    net_income_q = extract_metric_quarterly(income_quarterly, "NetIncome")
+    net_income_q = extract_metric_quarterly(income_quarterly, "IncomeAfterTaxes")
+    pretax_q = extract_metric_quarterly(income_quarterly, "PreTaxIncome")
+    tax_q = extract_metric_quarterly(income_quarterly, "TAX")
 
     result = {
         "market": "TW",
@@ -134,8 +145,13 @@ async def fetch_taiwan_financials(ticker: str) -> dict:
         "annual": {
             "revenue": revenue_annual,
             "net_income": net_income_annual,
+            "cost_of_goods": cost_of_goods,
             "gross_profit": gross_profit_annual,
+            "operating_expenses": operating_expenses,
             "operating_income": operating_income_annual,
+            "pretax_income": pretax_income,
+            "tax": tax,
+            "eps": eps,
             "total_assets": total_assets,
             "total_liabilities": total_liabilities,
             "equity": equity,
@@ -145,6 +161,8 @@ async def fetch_taiwan_financials(ticker: str) -> dict:
         "quarterly": {
             "revenue": [{"date": r.get("date"), "value": r.get("value")} for r in revenue_q],
             "net_income": [{"date": r.get("date"), "value": r.get("value")} for r in net_income_q],
+            "pretax_income": [{"date": r.get("date"), "value": r.get("value")} for r in pretax_q],
+            "tax": [{"date": r.get("date"), "value": r.get("value")} for r in tax_q],
         },
     }
 
@@ -179,6 +197,14 @@ def fetch_us_financials(ticker: str) -> dict:
         annual_net_income = safe_series(income, "Net Income")
         annual_gross_profit = safe_series(income, "Gross Profit")
         annual_operating_income = safe_series(income, "Operating Income")
+        # 見台股路徑的說明：費用與稅務科目是解釋獲利異常的關鍵
+        annual_cost_of_goods = safe_series(income, "Cost Of Revenue")
+        annual_operating_expenses = safe_series(income, "Operating Expense")
+        annual_rnd = safe_series(income, "Research And Development")
+        annual_sga = safe_series(income, "Selling General And Administration")
+        annual_pretax = safe_series(income, "Pretax Income")
+        annual_tax = safe_series(income, "Tax Provision")
+        annual_eps = safe_series(income, "Diluted EPS")
         annual_total_assets = safe_series(balance, "Total Assets")
         annual_total_liabilities = safe_series(balance, "Total Liabilities Net Minority Interest")
         annual_equity = safe_series(balance, "Stockholders Equity")
@@ -187,6 +213,8 @@ def fetch_us_financials(ticker: str) -> dict:
 
         quarterly_revenue = safe_series_quarterly(quarterly_income, "Total Revenue")
         quarterly_net_income = safe_series_quarterly(quarterly_income, "Net Income")
+        quarterly_pretax = safe_series_quarterly(quarterly_income, "Pretax Income")
+        quarterly_tax = safe_series_quarterly(quarterly_income, "Tax Provision")
 
         return {
             "market": "US",
@@ -194,8 +222,15 @@ def fetch_us_financials(ticker: str) -> dict:
             "annual": {
                 "revenue": annual_revenue,
                 "net_income": annual_net_income,
+                "cost_of_goods": annual_cost_of_goods,
                 "gross_profit": annual_gross_profit,
+                "rnd": annual_rnd,
+                "sga": annual_sga,
+                "operating_expenses": annual_operating_expenses,
                 "operating_income": annual_operating_income,
+                "pretax_income": annual_pretax,
+                "tax": annual_tax,
+                "eps": annual_eps,
                 "total_assets": annual_total_assets,
                 "total_liabilities": annual_total_liabilities,
                 "equity": annual_equity,
@@ -205,6 +240,8 @@ def fetch_us_financials(ticker: str) -> dict:
             "quarterly": {
                 "revenue": quarterly_revenue,
                 "net_income": quarterly_net_income,
+                "pretax_income": quarterly_pretax,
+                "tax": quarterly_tax,
             },
         }
     except Exception as e:

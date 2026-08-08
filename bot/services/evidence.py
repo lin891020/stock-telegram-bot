@@ -260,8 +260,11 @@ def _fmt_num(value) -> str:
 
 
 _ANNUAL_LABELS = [
-    ("revenue", "營收"), ("gross_profit", "毛利"), ("operating_income", "營業利益"),
-    ("net_income", "淨利"), ("total_assets", "總資產"), ("total_liabilities", "總負債"),
+    ("revenue", "營收"), ("cost_of_goods", "營業成本"), ("gross_profit", "毛利"),
+    ("rnd", "研發費用"), ("sga", "管銷費用"), ("operating_expenses", "營業費用"),
+    ("operating_income", "營業利益"), ("pretax_income", "稅前淨利"),
+    ("tax", "所得稅"), ("net_income", "淨利"), ("eps", "每股盈餘"),
+    ("total_assets", "總資產"), ("total_liabilities", "總負債"),
     ("equity", "股東權益"), ("operating_cashflow", "營業現金流"), ("capex", "資本支出"),
 ]
 
@@ -279,7 +282,10 @@ def _format_financial_block(annual: dict) -> str:
 
 def _format_quarterly_block(quarterly: dict) -> str:
     parts = []
-    for key, label in (("revenue", "營收"), ("net_income", "淨利")):
+    for key, label in (
+        ("revenue", "營收"), ("pretax_income", "稅前淨利"),
+        ("tax", "所得稅"), ("net_income", "淨利"),
+    ):
         rows = quarterly.get(key) or []
         if not rows:
             continue
