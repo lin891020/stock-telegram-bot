@@ -18,8 +18,9 @@ from bot.prompts.analysis import PROMPTS, ANALYSIS_BUTTONS
 logger = logging.getLogger(__name__)
 
 _SYSTEM = (
-    "你是一位華爾街資深股票分析師，用繁體中文撰寫專業且深入的分析報告。"
-    "分析時引用提供的真實財務數據，結論要有邏輯依據，語氣客觀。"
+    "你是一位華爾街資深股票分析師，正在示範如何拆解一家公司給想學會自己看公司的個人投資人。"
+    "用繁體中文，語氣客觀。所有數字必須引用提供的真實資料並標註來源，"
+    "推理過程比結論重要，不以自己的名義給出買賣評級。"
 )
 
 
@@ -148,7 +149,10 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # 手機上先看 5 行結論，完整報告在 PDF
         brief = _extract_brief(content)
         if brief:
-            await query.message.reply_text(f"{ticker} — {label}\n\n{brief}")
+            await query.message.reply_text(
+                f"{ticker} — {label}\n\n{brief}\n\n"
+                "ℹ️ 這是分析框架示範，重點在拆解方法與數據依據，不是投資建議。"
+            )
 
         pdf_bytes = generate_pdf(ticker, label, content)
 
@@ -162,7 +166,7 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.message.reply_document(
             document=pdf_bytes,
             filename=filename,
-            caption=f"✅ {ticker} — {label} 分析完成",
+            caption=f"✅ {ticker} — {label}｜分析框架示範，非投資建議",
         )
         await query.edit_message_text(f"✅ {ticker} {label} 分析完成")
 
