@@ -30,9 +30,17 @@ def split_message(text: str, limit: int = MAX_MSG_LEN) -> list[str]:
     return chunks
 
 
-async def send_long(bot, chat_id: int, text: str, parse_mode: str = None) -> None:
-    for chunk in split_message(text):
-        await bot.send_message(chat_id=chat_id, text=chunk, parse_mode=parse_mode)
+async def send_long(bot, chat_id: int, text: str, parse_mode: str = None,
+                    reply_markup=None) -> None:
+    """訊息過長時自動切分。按鈕只掛在最後一段，否則會出現在半截訊息下面。"""
+    chunks = split_message(text)
+    for index, chunk in enumerate(chunks):
+        await bot.send_message(
+            chat_id=chat_id,
+            text=chunk,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup if index == len(chunks) - 1 else None,
+        )
 
 
 async def reply_long(message, text: str, parse_mode: str = None) -> None:

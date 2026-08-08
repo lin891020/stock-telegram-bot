@@ -17,6 +17,9 @@ _Requirement = tuple[str, tuple[str, ...]]
 # 合成 key（非 yfinance 欄位），代表某一整塊資料是否到手
 NAME = "company_name"
 QUOTE = "quote"
+RELEASE = "earnings_release"   # 公司自己寫的財報新聞稿原文（SEC EDGAR）
+EPS_ACTUAL = "eps_actual"      # 本季實際 EPS
+EPS_ESTIMATE = "eps_estimate"  # 市場預估 EPS，beat/miss 的另一半
 FIN_ANNUAL = "financials_annual"
 FIN_QUARTERLY = "financials_quarterly"
 
@@ -68,6 +71,16 @@ REQUIREMENTS: dict[str, list[_Requirement]] = {
         ("成長率", ("revenueGrowth",)),
         ("分析師共識評級", ("recommendationKey",)),
         ("同業對照數據", ()),
+    ],
+    # 財報公布後的事實摘要：決策用，標準比 /analyze 嚴格。
+    # 這裡不要求同業與產業資料——那些拿不到，列進來只會每季重複洗版。
+    "earnings": [
+        ("標的公司名稱", (NAME,)),
+        ("最新股價", (QUOTE,)),
+        ("公司財報新聞稿原文（含管理層說法與官方財測）", (RELEASE,)),
+        ("本季實際 EPS", (EPS_ACTUAL,)),
+        ("市場預估 EPS（beat/miss 需要它）", (EPS_ESTIMATE,)),
+        ("季度財務報表", (FIN_QUARTERLY,)),
     ],
     "recommendation": _COMMON + [
         ("估值指標", ("trailingPE", "forwardPE")),

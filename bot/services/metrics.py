@@ -76,6 +76,15 @@ METRIC_SPECS: dict[str, MetricSpec] = {
         "現金部位", "money", _LATEST_BS,
         "含約當現金與短期投資，大於資產負債表的「現金及約當現金」",
     ),
+    "currency": MetricSpec(
+        "報價幣別", "text", _STATIC,
+        "股價、市值、目標價、EPS 使用的幣別",
+    ),
+    "financialCurrency": MetricSpec(
+        "財報幣別", "text", _STATIC,
+        "財務報表使用的幣別。與報價幣別不同時（例如韓國公司在美掛牌），"
+        "每股數字已換算為報價幣別，不可與財報的絕對金額直接相比或相除",
+    ),
     "sector": MetricSpec("產業（大類）", "text", _STATIC),
     "industry": MetricSpec("產業（細類）", "text", _STATIC),
 }
@@ -142,6 +151,23 @@ def check_margin_consistency(info: dict) -> list[str]:
     return problems
 
 
+def check_currency_consistency(info: dict) -> list[str]:
+    """報價幣別與財報幣別不同時提出警告。
+
+    實測 SK hynix：股價與 EPS 是美元，損益表是韓元。兩者並列而不區分，
+    就會出現「EPS 9.06 元、淨利 93.92 兆韓元」這種無法對照的組合。
+    """
+    quote_ccy = info.get("currency")
+    fin_ccy = info.get("financialCurrency")
+    if quote_ccy and fin_ccy and quote_ccy != fin_ccy:
+        return [
+            f"報價幣別為 {quote_ccy}、財報幣別為 {fin_ccy}。每股數字（EPS、目標價）"
+            f"以 {quote_ccy} 計價，財報絕對金額以 {fin_ccy} 計價，"
+            "兩者不可直接相比、相除或混寫在同一句話裡"
+        ]
+    return []
+
+
 def extract_metrics(info: dict) -> tuple[dict[str, dict], list[str]]:
     """挑出關鍵指標並做一致性檢查。
 
@@ -150,6 +176,7 @@ def extract_metrics(info: dict) -> tuple[dict[str, dict], list[str]]:
     """
     anomalies = check_margin_consistency(info)
     dropped = set(_MARGIN_CHAIN) if anomalies else set()
+    anomalies = anomalies + check_currency_consistency(info)
 
     metrics = {}
     for key, spec in METRIC_SPECS.items():

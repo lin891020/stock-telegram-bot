@@ -28,8 +28,10 @@ def test_html_to_text_strips_tags_and_entities():
     assert "x()" not in text
 
 
-def test_html_to_text_collapses_whitespace():
-    assert html_to_text("<p>a</p>\n\n   <p>b</p>") == "a b"
+def test_html_to_text_collapses_intra_line_whitespace():
+    """行內空白壓成單一空格，但段落/列的換行要留著（欄位對應靠它）。"""
+    assert html_to_text("<span>a</span>   \n  <span>b</span>") == "a b"
+    assert html_to_text("<p>a</p>\n\n   <p>b</p>") == "a\nb"
 
 
 def test_detects_us_style_release():
@@ -88,3 +90,26 @@ def test_list_filings_survives_bad_payload(monkeypatch):
 def test_user_agent_has_contact_form():
     """SEC 會擋掉不含聯絡方式的 User-Agent（純網址回 403，實測過）。"""
     assert "@" in filings.USER_AGENT
+
+
+def test_table_columns_survive_conversion():
+    """多欄財務表壓成一行，數字就對不回標題——實測讓 SK hynix 的季增被讀成年增。"""
+    html = (
+        "<table><tr><td>Revenue</td></tr>"
+        "<tr><td>79,318,746</td><td>131,895,033</td></tr>"
+        "<tr><td>52,576,287</td><td>N.A.</td></tr>"
+        "<tr><td>256.8</td><td>230.8</td></tr></table>"
+    )
+    lines = html_to_text(html).split("\n")
+    assert lines[0] == "Revenue"
+    assert lines[1] == "79,318,746 | 131,895,033"
+    assert lines[3] == "256.8 | 230.8"
+
+
+def test_paragraphs_become_separate_lines():
+    assert html_to_text("<p>first</p><p>second</p>").split("\n") == ["first", "second"]
+
+
+def test_empty_cells_do_not_create_stray_separators():
+    out = html_to_text("<tr><td>a</td><td></td><td>b</td></tr>")
+    assert out == "a | b"

@@ -145,14 +145,36 @@ _ENTITIES = {
 }
 
 
+_ROW_END_RE = re.compile(r"</(tr|p|div|h\d)\s*>", re.IGNORECASE)
+_CELL_END_RE = re.compile(r"</(td|th)\s*>", re.IGNORECASE)
+
+
 def html_to_text(html: str) -> str:
-    """把申報文件的 HTML 轉成乾淨純文字。"""
+    """把申報文件的 HTML 轉成純文字，但**保留表格的欄列結構**。
+
+    以前整份壓成一行，多欄財務表就變成一長串沒有標籤的數字，
+    模型只能猜哪個數字對應哪一欄——實測 SK hynix 的 6-K 因此把
+    季增 50.9% 讀成年增（真正的年增是 256.8%），差一個數量級。
+    儲存格之間放 " | "、列尾換行，欄位對應才留得住。
+    """
     text = _SCRIPT_RE.sub(" ", html)
+    # 先把原始碼裡的換行壓成空白——那只是排版，不是結構。
+    # 之後插入的換行才代表「這裡真的換列」，欄位對應才不會被假換行打亂。
+    text = re.sub(r"\s+", " ", text)
+    text = _CELL_END_RE.sub(" | ", text)
+    text = _ROW_END_RE.sub("\n", text)
     text = _TAG_RE.sub(" ", text)
     for entity, replacement in _ENTITIES.items():
         text = text.replace(entity, replacement)
     text = re.sub(r"&#\d+;", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+
+    lines = []
+    for line in text.split("\n"):
+        line = re.sub(r"[ \t]+", " ", line)
+        line = re.sub(r"(\s*\|\s*)+", " | ", line).strip(" |").strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
 
 
 def filing_items(cik: int, filing: dict) -> set[str]:

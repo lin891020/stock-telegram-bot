@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import date
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
@@ -9,7 +10,9 @@ from bot.config import ALLOWED_TELEGRAM_ID
 from bot.handlers.messaging import reply_long, send_long
 from bot.handlers.pending import ask, register
 from bot.services.earnings import fetch_earnings_data
-from bot.services.earnings_watch import all_watchlist_tickers, detect_new_report, prune_state
+from bot.services.earnings_watch import all_watchlist_tickers, detect_earnings_event, prune_state
+from bot.services.earnings_report import build_brief, build_full_report
+from bot.services.pdf import generate_pdf
 from bot.services.llm import call_llm
 from bot.services.stock import looks_like_ticker, search_ticker, is_taiwan_stock
 from bot.services.tw_stocks import search_tw_stocks, has_chinese
@@ -169,9 +172,11 @@ async def _pending_earnings(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 
 async def poll_earnings_announcements(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """定時執行：掃所有自選股，偵測到新一季實際 EPS 就推送一次分析。
+    """定時執行：掃所有自選股，偵測到財報公布就推一則速覽。
 
-    不需要事前登記；第一次看到某支股票只記基準、不推播（見 earnings_watch）。
+    觸發以 SEC 官方申報為主、yfinance 的 EPS 為輔（見 earnings_watch）。
+    完整報告不自動生成——財報季擠在兩三週內，每份都跑主力模型太貴，
+    而且多數時候你看完速覽就夠了。想看深的再按按鈕。
     """
     try:
         tickers = all_watchlist_tickers()
@@ -181,29 +186,56 @@ async def poll_earnings_announcements(context: ContextTypes.DEFAULT_TYPE) -> Non
 
         for ticker in tickers:
             try:
-                data = await fetch_earnings_data(ticker)
-                if data.get("error"):
+                event = await detect_earnings_event(ticker)
+                if not event:
                     continue
 
-                new_date = detect_new_report(ticker, data)
-                if not new_date:
-                    continue
-
-                analysis = await _run_earnings_analysis(ticker, data)
-                name = data.get("name", ticker)
+                brief, evidence, label = await build_brief(ticker)
+                missing_note = (
+                    f"\n\n⚠️ 本次缺漏 {len(evidence.missing)} 項（完整報告內有清單）"
+                    if evidence.missing else ""
+                )
                 await send_long(
                     context.bot,
                     ALLOWED_TELEGRAM_ID,
-                    f"📋 {name}({ticker}) 財報公布！（{new_date}）\n\n{analysis}",
+                    f"📋 {label} 財報公布（{event['date']}・{event['signal']}）\n\n"
+                    f"{brief}{missing_note}",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("📄 完整報告", callback_data=f"erpt_{ticker}")
+                    ]]),
                 )
+                logger.info("earnings brief pushed for %s (%s)", ticker, event["signal"])
             except Exception as e:
-                logger.error("earnings announcement push failed for %s: %s", ticker, e, exc_info=True)
+                logger.error("earnings push failed for %s: %s", ticker, e, exc_info=True)
     except Exception as e:
         logger.error("poll_earnings_announcements failed: %s", e, exc_info=True)
+
+
+@restrict_callback
+async def earnings_report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """速覽的 📄 按鈕：現生完整報告並出 PDF。"""
+    query = update.callback_query
+    await query.answer()
+
+    ticker = query.data[len("erpt_"):]
+    status = await query.message.reply_text(f"⏳ 正在整理 {ticker} 完整財報解讀...")
+    try:
+        content, label = await build_full_report(ticker)
+        pdf_bytes = generate_pdf(ticker, "財報解讀", content)
+        await query.message.reply_document(
+            document=pdf_bytes,
+            filename=f"{ticker}_earnings_{date.today().strftime('%Y%m%d')}.pdf",
+            caption=f"✅ {label} 財報解讀",
+        )
+        await status.delete()
+    except Exception as e:
+        logger.error("earnings report failed for %s: %s", ticker, e, exc_info=True)
+        await status.edit_text("❌ 報告生成失敗，請稍後再試")
 
 
 def build_earnings_handler(auth_filter):
     return [
         CommandHandler("earnings", earnings_command, filters=auth_filter),
         CallbackQueryHandler(earnings_pick_callback, pattern="^epick_"),
+        CallbackQueryHandler(earnings_report_callback, pattern="^erpt_"),
     ]
