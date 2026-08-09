@@ -171,4 +171,8 @@ async def get_stock_summary(ticker: str) -> dict:
     ticker = ticker.upper().strip()
     if is_taiwan_stock(ticker):
         return await fetch_taiwan_data(ticker)
-    return fetch_us_data(ticker)
+    # fetch_us_data 是同步的 yfinance 呼叫（.info 是最慢的那個，約 1-3 秒）。
+    # 直接 await 會卡住整個 event loop：呼叫端常用 gather 一次抓好幾支，
+    # 沒包 to_thread 的話那個 gather 是假的——實際是一支一支輪流跑，
+    # 而且期間整隻 bot 對所有人沒反應。
+    return await asyncio.to_thread(fetch_us_data, ticker)
