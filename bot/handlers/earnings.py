@@ -12,6 +12,7 @@ from bot.handlers.pending import ask, register
 from bot.services.earnings import fetch_earnings_data
 from bot.services.earnings_watch import all_watchlist_tickers, detect_earnings_event, prune_state
 from bot.services.earnings_report import build_brief, build_full_report
+from bot.services.formatting import safe_filename
 from bot.services.pdf import generate_pdf
 from bot.services.stock import looks_like_ticker, search_ticker, is_taiwan_stock
 from bot.services.tw_stocks import search_tw_stocks, has_chinese
@@ -202,10 +203,10 @@ async def earnings_report_callback(update: Update, context: ContextTypes.DEFAULT
     status = await query.message.reply_text(f"⏳ 正在整理 {ticker} 完整財報解讀...")
     try:
         content, label = await build_full_report(ticker)
-        pdf_bytes = generate_pdf(ticker, "財報解讀", content)
+        pdf_bytes = generate_pdf(label, "財報解讀", content)
         await query.message.reply_document(
             document=pdf_bytes,
-            filename=f"{ticker}_earnings_{date.today().strftime('%Y%m%d')}.pdf",
+            filename=f"{safe_filename(label)}_財報_{date.today().strftime('%Y%m%d')}.pdf",
             caption=f"✅ {label} 財報解讀",
         )
         await status.delete()

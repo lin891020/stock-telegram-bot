@@ -16,9 +16,22 @@ def _unit(data: dict) -> str:
     return "元" if data.get("market") == "TW" else "USD"
 
 
-def label(ticker: str, data: dict) -> str:
-    name = data.get("name", "") if isinstance(data, dict) else ""
+def name_label(ticker: str, name: str) -> str:
+    """「南亞科(2408)」——名稱拿不到就只回代號，絕不猜。
+
+    報告曾經把 2408 寫成聯電，就是因為名稱沒進到證據包、模型自己填了一個。
+    """
     return f"{name}({ticker})" if name and name != ticker else ticker
+
+
+def label(ticker: str, data: dict) -> str:
+    return name_label(ticker, data.get("name", "") if isinstance(data, dict) else "")
+
+
+def safe_filename(text: str) -> str:
+    """檔名用：拿掉路徑分隔字元與控制字元。"""
+    cleaned = "".join(c for c in text if c.isprintable() and c not in '/\\:*?"<>|')
+    return cleaned.strip().replace(" ", "_")
 
 
 def change_str(price: float, prev) -> str:

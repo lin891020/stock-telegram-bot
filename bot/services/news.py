@@ -6,6 +6,7 @@ import time
 from datetime import date, datetime, timezone
 import yfinance as yf
 
+from bot.services.formatting import label
 from bot.services.llm import call_llm_light
 from bot.services.stock import is_taiwan_stock, get_stock_summary
 logger = logging.getLogger(__name__)
@@ -27,18 +28,17 @@ def _day_pct(stock_data: dict):
 
 
 def _price_line(ticker: str, stock_data: dict) -> str:
-    name = stock_data.get("name", "") if isinstance(stock_data, dict) else ""
-    label = f"{name}({ticker})" if name and name != ticker else ticker
+    lbl = label(ticker, stock_data)
     price = stock_data.get("price") or stock_data.get("close") if isinstance(stock_data, dict) else None
     if not price:
-        return f"{label}  無報價"
+        return f"{lbl}  無報價"
     pct = _day_pct(stock_data)
     if pct is None:
-        return f"{label}  {price:,.2f}"
+        return f"{lbl}  {price:,.2f}"
     arrow = "▲" if pct >= 0 else "▼"
     sign = "+" if pct >= 0 else ""
     warn = " ⚠️" if abs(pct) >= _BIG_MOVE_PCT else ""
-    return f"{label}  {price:,.2f}  {arrow} {sign}{pct:.2f}%{warn}"
+    return f"{lbl}  {price:,.2f}  {arrow} {sign}{pct:.2f}%{warn}"
 
 
 def _price_overview(tw: list[str], us: list[str], prices: dict) -> str:
@@ -150,9 +150,7 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
     ordered = ordered_tw + ordered_us
 
     def _label(t: str) -> str:
-        data = prices.get(t, {})
-        name = data.get("name", "") if isinstance(data, dict) else ""
-        return f"{name}({t})" if name and name != t else t
+        return label(t, prices.get(t, {}))
 
     # 有新聞或單日漲跌 >= 3% 才進重點分析；其餘收合成一行
     active = [

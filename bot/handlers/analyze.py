@@ -12,6 +12,7 @@ from bot.services.financials import get_financials
 from bot.services.evidence import build_evidence
 from bot.services.metrics import fetch_key_metrics
 from bot.services.llm import call_llm
+from bot.services.formatting import name_label, safe_filename
 from bot.services.pdf import generate_pdf
 from bot.prompts.analysis import PROMPTS, ANALYSIS_BUTTONS
 
@@ -154,21 +155,20 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 "ℹ️ 這是分析框架示範，重點在拆解方法與數據依據，不是投資建議。"
             )
 
-        pdf_bytes = generate_pdf(ticker, label, content)
+        company_name = stock_data.get("name", "") if isinstance(stock_data, dict) else ""
+        heading = name_label(ticker, company_name)
+        pdf_bytes = generate_pdf(heading, label, content)
 
         today = date.today().strftime("%Y%m%d")
-        company_name = stock_data.get("name", "") if isinstance(stock_data, dict) else ""
-        if is_taiwan_stock(ticker) and company_name:
-            filename = f"{ticker}_{company_name}_{today}.pdf"
-        else:
-            filename = f"{ticker}_{today}.pdf"
+        # 美股以前只有代號，台股才帶名稱——沒有理由不一致
+        stem = f"{ticker}_{safe_filename(company_name)}" if company_name else ticker
 
         await query.message.reply_document(
             document=pdf_bytes,
-            filename=filename,
-            caption=f"✅ {ticker} — {label}｜分析框架示範，非投資建議",
+            filename=f"{stem}_{today}.pdf",
+            caption=f"✅ {heading} — {label}｜分析框架示範，非投資建議",
         )
-        await query.edit_message_text(f"✅ {ticker} {label} 分析完成")
+        await query.edit_message_text(f"✅ {heading} {label} 分析完成")
 
     except Exception as exc:
         logger.error("Analysis failed for %s/%s: %s", ticker, analysis_key, exc, exc_info=True)

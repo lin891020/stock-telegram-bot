@@ -14,6 +14,7 @@ from bot.prompts.earnings_report import (
 from bot.services.earnings import fetch_earnings_data
 from bot.services.evidence import EPS_ACTUAL, EPS_ESTIMATE, RELEASE, build_evidence
 from bot.services.filings import fetch_earnings_release
+from bot.services.formatting import name_label
 from bot.services.financials import get_financials
 from bot.services.llm import call_llm
 from bot.services.metrics import fetch_key_metrics
@@ -24,10 +25,6 @@ logger = logging.getLogger(__name__)
 # 新聞稿最長餵這麼多字元。TSLA 的 41,677 字元裡後半多是財務報表附表，
 # 管理層說法與財測都在前段，截斷不影響本報告要的東西。
 _MAX_RELEASE_CHARS = 24000
-
-
-def _label(ticker: str, name: str) -> str:
-    return f"{name}({ticker})" if name and name != ticker else ticker
 
 
 def _latest_reported_quarter(earnings: dict) -> dict | None:
@@ -62,7 +59,7 @@ async def gather_earnings_evidence(ticker: str):
     release = _ok(release, None)
 
     name = (stock_data.get("name") or earnings.get("name") or "")
-    label = _label(ticker, name)
+    label = name_label(ticker, name)
 
     evidence = build_evidence(ticker, "earnings", stock_data, financials, metrics, anomalies)
 

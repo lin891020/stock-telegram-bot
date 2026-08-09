@@ -128,7 +128,12 @@ def _build_table(rows: list[list[str]], font: str) -> Table:
     return t
 
 
-def generate_pdf(ticker: str, analysis_type: str, content: str) -> bytes:
+def generate_pdf(heading: str, analysis_type: str, content: str) -> bytes:
+    """heading 是報告標題，請傳「南亞科(2408)」這種帶公司名的完整標籤。
+
+    以前這裡只吃 ticker，所以封面第一行是「2408 — 財報解讀」——
+    名稱明明早就抓到了（呼叫端拿它組 caption 和檔名），就是沒傳進來。
+    """
     font = _ensure_font()
     buffer = io.BytesIO()
 
@@ -168,7 +173,7 @@ def generate_pdf(ticker: str, analysis_type: str, content: str) -> bytes:
     )
 
     story = [
-        Paragraph(_esc(_strip_emoji(ticker)) + " — " + _esc(_strip_emoji(analysis_type)), title_style),
+        Paragraph(_esc(_strip_emoji(heading)) + " — " + _esc(_strip_emoji(analysis_type)), title_style),
         HRFlowable(width="100%", thickness=1, color=colors.HexColor("#cccccc")),
         Spacer(1, 0.3 * cm),
     ]
