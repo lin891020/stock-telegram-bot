@@ -155,6 +155,7 @@ python main.py
 | `OPENAI_API_KEY` | — | GitHub Models token（免費） |
 | `GITHUB_TOKEN` | — | `/finance` 個人資料儲存用（可選） |
 | `GITHUB_REPO` | — | 儲存用戶資料的 Repo，格式：`user/repo` |
+| `FINMIND_TOKEN` | — | [FinMind](https://finmindtrade.com) 台股財報，免費註冊可提高額度 |
 | `SEC_USER_AGENT` | — | SEC 要求的聯絡方式，格式：`專案名 you@example.com`。不設會用預設值，但 SEC 可能限流 |
 
 ---
