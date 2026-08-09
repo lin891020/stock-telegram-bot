@@ -20,6 +20,8 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
+from bot.services.store import load_json, save_json
+
 logger = logging.getLogger(__name__)
 
 # SEC 硬性要求 User-Agent 長得像「名稱 聯絡信箱」，純網址形式會被擋 403。
@@ -63,24 +65,20 @@ def _sec_get(url: str, timeout: float = 25.0) -> Optional[str]:
 
 
 def _load_cik_cache() -> dict:
-    if not _CIK_CACHE.exists():
+    data = load_json(_CIK_CACHE, {})
+    fetched = data.get("fetched", "")
+    if not fetched:
         return {}
     try:
-        data = json.loads(_CIK_CACHE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    fetched = data.get("fetched", "")
-    if not fetched or (date.today() - date.fromisoformat(fetched)).days > _CIK_CACHE_DAYS:
+        if (date.today() - date.fromisoformat(fetched)).days > _CIK_CACHE_DAYS:
+            return {}
+    except ValueError:
         return {}
     return data.get("map", {})
 
 
 def _save_cik_cache(mapping: dict) -> None:
-    _CIK_CACHE.parent.mkdir(exist_ok=True)
-    _CIK_CACHE.write_text(
-        json.dumps({"fetched": str(date.today()), "map": mapping}, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    save_json(_CIK_CACHE, {"fetched": str(date.today()), "map": mapping})
 
 
 def get_cik(ticker: str) -> Optional[int]:

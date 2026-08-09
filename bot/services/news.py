@@ -108,19 +108,13 @@ def _fetch_news(ticker: str) -> list[dict]:
         return []
 
 
-def _build_news_data(tickers: list[str]) -> tuple[str, dict]:
-    """Returns (headlines_block_for_llm, news_items_dict {ticker: [{title, url}]})."""
-    blocks = []
-    news_items = {}
-    for ticker in tickers:
-        items = _fetch_news(ticker)
-        news_items[ticker] = items
-        if not items:
-            blocks.append(f"=== {ticker} ===\n（無新聞）")
-        else:
-            lines = "\n".join(f"- {i['title']}" for i in items)
-            blocks.append(f"=== {ticker} ===\n{lines}")
-    return "\n\n".join(blocks), news_items
+def _build_news_data(tickers: list[str]) -> dict:
+    """{ticker: [{title, url}]}。
+
+    以前這裡還順手拼一份給 LLM 的標題區塊，但呼叫端從來沒用過那個回傳值
+    ——真正餵給模型的區塊是後面依 active 清單重拼的。
+    """
+    return {ticker: _fetch_news(ticker) for ticker in tickers}
 
 
 def _parse_llm_sections(text: str, tickers: list[str]) -> dict[str, str]:
@@ -143,7 +137,7 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
     news_data_task = asyncio.to_thread(_build_news_data, tickers)
     price_tasks = [get_stock_summary(t) for t in tickers]
 
-    (_, news_items), *price_results = await asyncio.gather(news_data_task, *price_tasks)
+    news_items, *price_results = await asyncio.gather(news_data_task, *price_tasks)
     prices = {t: data for t, data in zip(tickers, price_results)}
 
     def _sort_key(t: str):

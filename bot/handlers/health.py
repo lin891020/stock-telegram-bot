@@ -13,6 +13,7 @@ from bot.services.alerts import get_alerts
 from bot.services.filings import EARNINGS_FORMS, get_cik, list_filings
 from bot.services.financials import _finmind_get
 from bot.services.llm import call_llm, get_current_model, AVAILABLE_MODELS
+from bot.services.pdf import font_status
 from bot.services.watchlist import get_watchlist
 
 logger = logging.getLogger(__name__)
@@ -82,12 +83,13 @@ def _check_llm() -> tuple[bool, str]:
 
 async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("⏳ 檢查各資料源中...")
-    yf_ok, tw_ok, sec_ok, fm_ok, lxml_ok, llm_ok = await asyncio.gather(
+    yf_ok, tw_ok, sec_ok, fm_ok, lxml_ok, font_ok, llm_ok = await asyncio.gather(
         asyncio.to_thread(_check_yfinance),
         asyncio.to_thread(_check_twse),
         asyncio.to_thread(_check_sec),
         asyncio.to_thread(_check_finmind),
         asyncio.to_thread(_check_lxml),
+        asyncio.to_thread(font_status),
         asyncio.to_thread(_check_llm),
     )
 
@@ -103,6 +105,7 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"{line(sec_ok, '美股財報原文 (SEC EDGAR)')}\n"
         f"{line(fm_ok, '台股財報 (FinMind)')}\n"
         f"{line(lxml_ok, 'lxml 解析器')}\n"
+        f"{line(font_ok, 'PDF 中文字型')}\n"
         f"{line(llm_ok, 'AI 模型')}\n\n"
         f"目前模型：{AVAILABLE_MODELS.get(get_current_model(), (get_current_model(),))[0]}\n"
         f"追蹤股票：{len(get_watchlist(user_id))} 檔\n"

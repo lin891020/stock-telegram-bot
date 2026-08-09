@@ -1,19 +1,17 @@
-import json
 from pathlib import Path
 from typing import Iterator
+
+from bot.services.store import load_json, save_json
 
 _FILE = Path("data/watchlist.json")
 
 
 def _load() -> dict:
-    if not _FILE.exists():
-        return {}
-    return json.loads(_FILE.read_text(encoding="utf-8"))
+    return load_json(_FILE, {})
 
 
 def _save(data: dict) -> None:
-    _FILE.parent.mkdir(exist_ok=True)
-    _FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json(_FILE, data)
 
 
 def _migrate_user(raw) -> dict:

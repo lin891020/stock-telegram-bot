@@ -6,11 +6,12 @@
 
 推播去重：同一天、同一支、同一個方向只推一次；換日自動清空。
 """
-import json
 import math
 from datetime import date
 from pathlib import Path
 from typing import Optional
+
+from bot.services.store import load_json, save_json
 
 from bot.services.stock import is_taiwan_stock
 
@@ -67,17 +68,11 @@ def classify_move(ticker: str, price: Optional[float], prev_close: Optional[floa
 
 
 def _load() -> dict:
-    if not _FILE.exists():
-        return {}
-    try:
-        return json.loads(_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return load_json(_FILE, {})
 
 
 def _save(data: dict) -> None:
-    _FILE.parent.mkdir(exist_ok=True)
-    _FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json(_FILE, data)
 
 
 def _today_state() -> dict:

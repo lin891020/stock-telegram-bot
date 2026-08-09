@@ -1,9 +1,10 @@
-import json
 import re
 import uuid
 from datetime import date
 from pathlib import Path
 from typing import Optional
+
+from bot.services.store import load_json, save_json
 
 _FILE = Path("data/alerts.json")
 
@@ -52,17 +53,11 @@ def is_triggered(alert: dict, price: float, prev_close: Optional[float]) -> bool
 
 
 def _load() -> dict:
-    if not _FILE.exists():
-        return {}
-    try:
-        return json.loads(_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return load_json(_FILE, {})
 
 
 def _save(data: dict) -> None:
-    _FILE.parent.mkdir(exist_ok=True)
-    _FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json(_FILE, data)
 
 
 def get_alerts(user_id: int) -> list[dict]:

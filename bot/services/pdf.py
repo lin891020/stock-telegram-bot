@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 import re
 from reportlab.lib.pagesizes import A4
@@ -8,6 +9,8 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Table, TableStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+
+logger = logging.getLogger(__name__)
 
 _FONT_NAME = "NotoSans"
 _FONT_REGISTERED = False
@@ -39,7 +42,23 @@ def _ensure_font() -> str:
         _FONT_REGISTERED = True
         return _FONT_NAME
 
+    # Helvetica 沒有中文字模，整份報告的中文會變空白或黑方塊。
+    # 這種失敗以前完全無聲——PDF 照樣產出、照樣送達，只是打開來看不懂。
+    logger.error(
+        "找不到中文字型 %s，PDF 的中文將無法顯示。請執行 python scripts/download_font.py",
+        font_path,
+    )
     return "Helvetica"
+
+
+def font_status() -> tuple[bool, str]:
+    """給 /health 用：中文字型在不在。"""
+    path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "fonts", "NotoSansTC-Regular.ttf")
+    )
+    if os.path.exists(path):
+        return True, f"{os.path.getsize(path) // 1024 // 1024} MB"
+    return False, "缺字型，PDF 中文會是空白（跑 scripts/download_font.py）"
 
 
 def _esc(s: str) -> str:
@@ -229,9 +248,11 @@ def generate_pdf(ticker: str, analysis_type: str, content: str) -> bytes:
             story.append(Paragraph(f"&bull;&nbsp;&nbsp;{text}", body_style))
             continue
 
-        if re.match(r"^\d+\. ", line):
-            text = _inline_bold(_esc(_strip_emoji(re.sub(r"^\d+\. ", "", line))))
-            story.append(Paragraph(text, body_style))
+        # 編號清單：以前把「1. 」整個丟掉，讀者看到的是一堆沒有次序的段落
+        numbered = re.match(r"^(\d+)\. (.*)$", line)
+        if numbered:
+            text = _inline_bold(_esc(_strip_emoji(numbered.group(2))))
+            story.append(Paragraph(f"{numbered.group(1)}.&nbsp;&nbsp;{text}", body_style))
             continue
 
         # Full-line bold (whole line is **...**)

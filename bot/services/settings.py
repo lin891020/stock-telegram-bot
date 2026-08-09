@@ -1,7 +1,8 @@
-import json
 import re
 from pathlib import Path
 from typing import Optional
+
+from bot.services.store import load_json, save_json
 
 _FILE = Path("data/settings.json")
 
@@ -26,17 +27,11 @@ def parse_hhmm(text: str) -> Optional[tuple[int, int]]:
 
 
 def _load() -> dict:
-    if not _FILE.exists():
-        return {}
-    try:
-        return json.loads(_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return load_json(_FILE, {})
 
 
 def _save(data: dict) -> None:
-    _FILE.parent.mkdir(exist_ok=True)
-    _FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json(_FILE, data)
 
 
 def get_time(key: str) -> str:

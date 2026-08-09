@@ -4,11 +4,12 @@
 第一次看到某支股票時只寫基準、不推播，避免上線當下把舊財報全推一遍。
 """
 import asyncio
-import json
 import logging
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
+
+from bot.services.store import load_json, save_json
 
 from bot.services.earnings import fetch_earnings_data
 from bot.services.filings import EARNINGS_FORMS, fetch_earnings_release, get_cik, list_filings
@@ -21,17 +22,11 @@ _FILE = Path("data/earnings_watch.json")
 
 
 def _load() -> dict:
-    if not _FILE.exists():
-        return {}
-    try:
-        return json.loads(_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return load_json(_FILE, {})
 
 
 def _save(data: dict) -> None:
-    _FILE.parent.mkdir(exist_ok=True)
-    _FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json(_FILE, data)
 
 
 def all_watchlist_tickers() -> list[str]:
