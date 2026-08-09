@@ -13,7 +13,7 @@ from typing import Optional
 from bot.services.earnings import fetch_earnings_data
 from bot.services.filings import EARNINGS_FORMS, fetch_earnings_release, get_cik, list_filings
 from bot.services.stock import is_taiwan_stock
-from bot.services.watchlist import _load as _load_watchlists
+from bot.services.watchlist import all_tickers
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +35,7 @@ def _save(data: dict) -> None:
 
 
 def all_watchlist_tickers() -> list[str]:
-    tickers = []
-    for raw in _load_watchlists().values():
-        for t in (raw.keys() if isinstance(raw, dict) else raw):
-            if t not in tickers:
-                tickers.append(t)
-    return tickers
+    return all_tickers()
 
 
 def latest_reported_date(data: dict) -> Optional[str]:

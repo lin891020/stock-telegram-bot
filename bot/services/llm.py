@@ -1,3 +1,5 @@
+import logging
+
 import httpx
 import anthropic as _anthropic
 from openai import OpenAI
@@ -5,6 +7,7 @@ from bot.config import ANTHROPIC_API_KEY, GEMINI_API_KEY, GITHUB_TOKEN, LLM_PROV
 from bot.services.settings import get_saved_model, save_model
 
 anthropic = _anthropic
+logger = logging.getLogger(__name__)
 
 # Model registry: key → (display_name, provider)
 AVAILABLE_MODELS: dict[str, tuple[str, str]] = {
@@ -20,6 +23,14 @@ ANTHROPIC_ANALYSIS_MODEL = "claude-sonnet-4-6"
 ANTHROPIC_CHAT_MODEL = "claude-haiku-4-5-20251001"
 GITHUB_MODEL = "gpt-4o-mini"
 GITHUB_BASE_URL = "https://models.inference.ai.azure.com"
+
+# 完整財報解讀實測約 6,000 中文字元（≈5K tokens），8192 的餘裕太薄，
+# 而且截斷是無聲的——只會看到報告斷在半句。
+MAX_TOKENS = 16000
+
+# Client 做成單例：每次呼叫重建會連同 httpx 連線池與 TLS 握手一起重來。
+_anthropic_client = None
+_github_client = None
 
 # Restore the last /model selection across restarts
 _saved = get_saved_model()
@@ -62,15 +73,35 @@ def call_llm_light(system: str, user: str) -> str:
     return call_llm(system, user)
 
 
+def _get_anthropic_client():
+    global _anthropic_client
+    if _anthropic_client is None:
+        _anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    return _anthropic_client
+
+
+def _text_from(response) -> str:
+    """把回應中的文字區塊接起來。
+
+    content 是一串區塊，不保證第一個就是文字——啟用 thinking 的模型
+    會把 thinking 區塊排在前面，直接取 content[0].text 會炸。
+    """
+    parts = [b.text for b in response.content if getattr(b, "type", None) == "text"]
+    if response.stop_reason == "max_tokens":
+        logger.warning("LLM 回應被 max_tokens 截斷（model=%s）", response.model)
+    return "".join(parts)
+
+
 def _call_anthropic(system: str, user: str, model: str) -> str:
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    response = client.messages.create(
+    # 這裡刻意不加 cache_control：system prompt 只有 25-50 tokens，
+    # 遠低於 prompt caching 的最低門檻（1024 tokens），加了不會報錯也不會生效。
+    response = _get_anthropic_client().messages.create(
         model=model,
-        max_tokens=8192,
-        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        max_tokens=MAX_TOKENS,
+        system=system,
         messages=[{"role": "user", "content": user}],
     )
-    return response.content[0].text
+    return _text_from(response)
 
 
 def _call_gemini(system: str, user: str, model: str) -> str:
@@ -80,7 +111,7 @@ def _call_gemini(system: str, user: str, model: str) -> str:
     payload = {
         "system_instruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
-        "generationConfig": {"maxOutputTokens": 8192},
+        "generationConfig": {"maxOutputTokens": MAX_TOKENS},
     }
     resp = httpx.post(url, params={"key": GEMINI_API_KEY}, json=payload, timeout=120.0)
     resp.raise_for_status()
@@ -89,10 +120,12 @@ def _call_gemini(system: str, user: str, model: str) -> str:
 
 
 def _call_github(system: str, user: str) -> str:
-    client = OpenAI(api_key=GITHUB_TOKEN, base_url=GITHUB_BASE_URL)
-    response = client.chat.completions.create(
+    global _github_client
+    if _github_client is None:
+        _github_client = OpenAI(api_key=GITHUB_TOKEN, base_url=GITHUB_BASE_URL)
+    response = _github_client.chat.completions.create(
         model=GITHUB_MODEL,
-        max_tokens=8192,
+        max_tokens=MAX_TOKENS,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},

@@ -10,7 +10,9 @@ import yfinance as yf
 from bot.auth import restrict_callback
 from bot.handlers.messaging import send_long
 from bot.handlers.pending import ask, register
-from bot.services.watchlist import get_watchlist_with_names, get_watchlist, add_ticker, remove_ticker, _load
+from bot.services.watchlist import (
+    get_watchlist_with_names, get_watchlist, add_ticker, remove_ticker, iter_watchlists,
+)
 from bot.services.formatting import quote_line
 from bot.services.market import fetch_market_summary
 from bot.services.news import fetch_and_summarize
@@ -290,12 +292,9 @@ async def send_daily_news(context: ContextTypes.DEFAULT_TYPE) -> None:
     taipei_now = datetime.now(timezone.utc) + timedelta(hours=_TAIPEI_UTC_OFFSET)
     if taipei_now.weekday() >= 5:  # 5=Sat, 6=Sun
         return
-    all_data = _load()
     today = date.today().strftime("%m/%d")
-    for user_id_str, raw in all_data.items():
-        tickers = list(raw.keys()) if isinstance(raw, dict) else raw
-        if not tickers:
-            continue
+    for user_id_str, items in iter_watchlists():
+        tickers = list(items)
         try:
             header = await _build_morning_header(int(user_id_str))
             summary = await fetch_and_summarize(tickers)
@@ -323,11 +322,9 @@ async def send_closing_digest(context: ContextTypes.DEFAULT_TYPE, market: str) -
         return
     today = date.today().strftime("%Y/%m/%d")
     title = "📊 台股收盤速報" if market == "TW" else "📊 美股收盤速報"
-    all_data = _load()
 
-    for user_id_str, raw in all_data.items():
-        tickers = list(raw.keys()) if isinstance(raw, dict) else raw
-        filtered = [t for t in tickers if is_taiwan_stock(t) == (market == "TW")]
+    for user_id_str, items in iter_watchlists():
+        filtered = [t for t in items if is_taiwan_stock(t) == (market == "TW")]
         if not filtered:
             continue
         try:

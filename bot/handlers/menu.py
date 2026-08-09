@@ -1,5 +1,5 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CommandHandler
+from telegram.ext import ContextTypes
 
 from bot.auth import restrict_callback
 from bot.handlers.learn import _topics_keyboard, _load_lessons

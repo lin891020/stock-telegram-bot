@@ -91,12 +91,11 @@ async def fetch_taiwan_financials(ticker: str) -> dict:
     one_year_ago = (date.today() - timedelta(days=366)).strftime("%Y-%m-%d")
 
     async with httpx.AsyncClient() as client:
-        income_annual, balance_annual, cashflow_annual, income_quarterly, ratio_data = await asyncio.gather(
+        income_annual, balance_annual, cashflow_annual, income_quarterly = await asyncio.gather(
             _finmind_get(client, "TaiwanStockFinancialStatements", ticker, three_years_ago),
             _finmind_get(client, "TaiwanStockBalanceSheet", ticker, three_years_ago),
             _finmind_get(client, "TaiwanStockCashFlowsStatement", ticker, three_years_ago),
             _finmind_get(client, "TaiwanStockFinancialStatements", ticker, one_year_ago),
-            _finmind_get(client, "TaiwanStockStockNote", ticker, three_years_ago),
         )
 
     if not income_annual and not balance_annual:

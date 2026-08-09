@@ -28,6 +28,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+# httpx 的 INFO log 會把完整請求 URL 印出來，Telegram 的 URL 裡就含 bot token，
+# 等於把 token 明文寫進 journalctl。調到 WARNING 才能安全地把 log 給別人看。
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 async def _post_init(application) -> None:
     await asyncio.to_thread(load_tw_stock_list)

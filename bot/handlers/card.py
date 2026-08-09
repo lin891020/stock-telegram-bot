@@ -12,8 +12,8 @@ from telegram.ext import ContextTypes, MessageHandler, CallbackQueryHandler, fil
 from bot.auth import restrict_callback
 from bot.handlers.alert import ask_alert_condition
 from bot.handlers.analyze import _analysis_keyboard
-from bot.handlers.earnings import _run_earnings_analysis
-from bot.handlers.messaging import reply_long
+from bot.handlers.earnings import _report_button, _run_earnings_analysis
+from bot.handlers.messaging import send_long
 from bot.handlers.pending import dispatch_pending
 from bot.services.formatting import quote_line
 from bot.services.recent import add_recent
@@ -134,8 +134,11 @@ async def card_earnings_callback(update: Update, context: ContextTypes.DEFAULT_T
     ticker = query.data[len("cearn_"):]
     status = await query.message.reply_text(f"⏳ 正在查詢 {ticker} 財報資料...")
     try:
-        result = await _run_earnings_analysis(ticker)
-        await reply_long(query.message, result)
+        result, _ = await _run_earnings_analysis(ticker)
+        await send_long(
+            context.bot, query.message.chat_id, result,
+            reply_markup=_report_button(ticker),
+        )
         await status.delete()
     except ValueError as e:
         await status.edit_text(f"❌ {e}")

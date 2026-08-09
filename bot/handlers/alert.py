@@ -15,7 +15,7 @@ from bot.services.alerts import (
 from bot.services.big_moves import classify_move, mark_sent, was_sent
 from bot.services.stock import is_taiwan_stock, looks_like_ticker
 from bot.services.tw_stocks import get_tw_name
-from bot.services.watchlist import _load as _load_watchlists
+from bot.services.watchlist import iter_watchlists
 
 logger = logging.getLogger(__name__)
 
@@ -201,9 +201,8 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
 def _watchlist_targets(tw_open: bool, us_open: bool) -> list[tuple[str, str, str]]:
     """(user_id_str, ticker, name)：自選股中所屬市場正在交易的標的。"""
     targets = []
-    for user_id_str, raw in _load_watchlists().items():
-        items = raw.items() if isinstance(raw, dict) else [(t, t) for t in raw]
-        for ticker, name in items:
+    for user_id_str, items in iter_watchlists():
+        for ticker, name in items.items():
             if tw_open if is_taiwan_stock(ticker) else us_open:
                 targets.append((user_id_str, ticker, name or ticker))
     return targets

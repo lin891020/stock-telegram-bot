@@ -7,102 +7,79 @@ from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 from bot.auth import restrict_callback
 from bot.config import ALLOWED_TELEGRAM_ID
-from bot.handlers.messaging import reply_long, send_long
+from bot.handlers.messaging import send_long
 from bot.handlers.pending import ask, register
 from bot.services.earnings import fetch_earnings_data
 from bot.services.earnings_watch import all_watchlist_tickers, detect_earnings_event, prune_state
 from bot.services.earnings_report import build_brief, build_full_report
 from bot.services.pdf import generate_pdf
-from bot.services.llm import call_llm
 from bot.services.stock import looks_like_ticker, search_ticker, is_taiwan_stock
 from bot.services.tw_stocks import search_tw_stocks, has_chinese
 
 logger = logging.getLogger(__name__)
 
-_LLM_SYSTEM = "你是一位華爾街資深財務分析師，專門解讀企業季報。用繁體中文，語氣簡潔專業。"
-_LLM_PROMPT = """【{ticker} {name} 財報速覽】
-
-下次財報日：{next_date}
-
-最近 4 季表現：
-{quarters_block}
-
-請分析：
-1. EPS beat/miss 趨勢（近 4 季整體表現）
-2. 營收成長動能（是否穩健成長）
-3. 整體財報品質評分（1-10 分）與關鍵風險
-4. 給長期投資人的一句話建議
-
-輸出格式規則（必須遵守）：
-- 純文字，不要使用 # ## ### 標題符號
-- 不要使用 ** 粗體符號
-- 用「▲ beat」「▼ miss」標示 EPS 表現
-- 結尾附上下次財報日提醒"""
+def _report_button(ticker: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("📄 完整報告", callback_data=f"erpt_{ticker}")
+    ]])
 
 
-def _build_quarters_block(quarters: list[dict], ticker: str = "") -> str:
-    if not quarters:
-        return "（無歷史財報資料）"
-    currency = "NT$" if is_taiwan_stock(ticker) else "$"
-    lines = []
-    for q in quarters:
-        dt = q.get("date", "")
-        year = int(dt[:4]) if len(dt) >= 4 else 0
-        month = int(dt[5:7]) if len(dt) >= 7 else 0
+def _format_quarter_history(quarters: list[dict], ticker: str = "") -> str:
+    """近幾季 EPS 的 beat/miss，純程式計算、不經模型。
 
-        # Earnings are announced ~1 month after the quarter ends.
-        # Map announcement month → reported fiscal quarter.
-        if month in (1, 2, 3):
-            q_label = f"Q4{year - 1}" if year else dt
-        elif month in (4, 5, 6):
-            q_label = f"Q1{year}" if year else dt
-        elif month in (7, 8, 9):
-            q_label = f"Q2{year}" if year else dt
-        elif month in (10, 11, 12):
-            q_label = f"Q3{year}" if year else dt
-        else:
-            q_label = dt
-
-        eps_est = q.get("eps_estimate")
-        eps_act = q.get("eps_actual")
-        revenue = q.get("revenue")
-
-        eps_part = ""
-        if eps_act is not None:
-            eps_part = f"EPS {currency}{eps_act:.2f}"
-            if eps_est is not None:
-                beat = eps_act - eps_est
-                arrow = "▲ beat" if beat >= 0 else "▼ miss"
-                pct = (beat / abs(eps_est) * 100) if eps_est != 0 else 0
-                sign = "+" if pct >= 0 else ""
-                eps_part += f"（預估 {currency}{eps_est:.2f}，{arrow} {sign}{pct:.1f}%）"
-        elif eps_est is not None:
-            eps_part = f"EPS 預估 {currency}{eps_est:.2f}（未公佈）"
-
-        rev_part = f"｜營收 {currency}{revenue:.2f}B" if revenue is not None else ""
-        lines.append(f"{q_label}：{eps_part}{rev_part}")
-
-    return "\n".join(lines)
-
-
-async def _run_earnings_analysis(ticker: str, data: dict | None = None) -> str:
-    """Fetch earnings data and return LLM analysis text, or raise on error.
-
-    已經抓過資料的呼叫端（例如公布偵測 job）可以直接傳進來，省一次 API。
+    這裡標的是**公布日**而不是財季代號。以前用「公布月份 → 曆年季別」
+    推算，對非曆年制的公司整片標錯——NVDA 五月公布的其實是 FY2027 Q1，
+    卻被標成 Q12026。財年結束月各家不同，光看公布日推不出來，
+    與其標一個看起來像真的的錯代號，不如誠實寫公布日。
     """
-    if data is None:
-        data = await fetch_earnings_data(ticker)
-    if data.get("error"):
-        raise ValueError(data["error"])
+    rows = [q for q in quarters if q.get("date")]
+    if not rows:
+        return ""
+    currency = "NT$" if is_taiwan_stock(ticker) else "$"
 
-    name = data.get("name", ticker)
-    next_date = data.get("next_earnings_date") or "未公佈"
-    quarters_block = _build_quarters_block(data.get("quarters", []), ticker)
+    lines = []
+    for q in sorted(rows, key=lambda r: r["date"], reverse=True)[:4]:
+        eps_act, eps_est = q.get("eps_actual"), q.get("eps_estimate")
+        if eps_act is not None:
+            part = f"EPS {currency}{eps_act:.2f}"
+            if eps_est is not None:
+                diff = eps_act - eps_est
+                arrow = "▲ beat" if diff >= 0 else "▼ miss"
+                pct = (diff / abs(eps_est) * 100) if eps_est else 0
+                part += f"（預估 {currency}{eps_est:.2f}，{arrow} {pct:+.1f}%）"
+        elif eps_est is not None:
+            part = f"EPS 預估 {currency}{eps_est:.2f}（尚未公布）"
+        else:
+            continue
+        lines.append(f"• {q['date']} 公布：{part}")
 
-    user = _LLM_PROMPT.format(
-        ticker=ticker, name=name, next_date=next_date, quarters_block=quarters_block
-    )
-    return await asyncio.to_thread(call_llm, _LLM_SYSTEM, user)
+    return "近幾季 EPS（依公布日）\n" + "\n".join(lines) if lines else ""
+
+
+async def _run_earnings_analysis(ticker: str) -> tuple[str, str]:
+    """財報速覽 + 近幾季 EPS 紀錄。回傳 (文字, label)。
+
+    走的是跟自動推播同一條證據包路徑：每個數字都標來源與期間，
+    缺的就明講缺。舊版在這裡自己出一個「財報品質 1-10 分」，
+    那個分數沒有任何資料支撐，純粹是模型編的。
+    """
+    brief, evidence, label = await build_brief(ticker)
+
+    parts = [f"📋 {label} 財報速覽", "", brief]
+
+    data = await fetch_earnings_data(ticker)
+    if not data.get("error"):
+        history = _format_quarter_history(data.get("quarters", []), ticker)
+        if history:
+            parts += ["", history]
+        next_date = data.get("next_earnings_date")
+        if next_date:
+            parts += ["", f"下次財報日：{next_date}"]
+
+    if evidence.missing:
+        parts.append(f"\n⚠️ 本次缺漏 {len(evidence.missing)} 項（完整報告內有清單）")
+
+    return "\n".join(parts), label
 
 
 async def earnings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -139,8 +116,11 @@ async def earnings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     await update.message.reply_text(f"⏳ 正在查詢 {ticker} 財報資料...")
     try:
-        result = await _run_earnings_analysis(ticker)
-        await reply_long(update.message, result)
+        result, _ = await _run_earnings_analysis(ticker)
+        await send_long(
+            context.bot, update.message.chat_id, result,
+            reply_markup=_report_button(ticker),
+        )
     except ValueError as e:
         await update.message.reply_text(f"❌ {e}")
     except Exception as e:
@@ -156,8 +136,11 @@ async def earnings_pick_callback(update: Update, context: ContextTypes.DEFAULT_T
     ticker = query.data.replace("epick_", "", 1)
     await query.edit_message_text(f"⏳ 正在查詢 {ticker} 財報資料...")
     try:
-        result = await _run_earnings_analysis(ticker)
-        await reply_long(query.message, result)
+        result, _ = await _run_earnings_analysis(ticker)
+        await send_long(
+            context.bot, query.message.chat_id, result,
+            reply_markup=_report_button(ticker),
+        )
     except ValueError as e:
         await query.edit_message_text(f"❌ {e}")
     except Exception as e:
@@ -200,9 +183,7 @@ async def poll_earnings_announcements(context: ContextTypes.DEFAULT_TYPE) -> Non
                     ALLOWED_TELEGRAM_ID,
                     f"📋 {label} 財報公布（{event['date']}・{event['signal']}）\n\n"
                     f"{brief}{missing_note}",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("📄 完整報告", callback_data=f"erpt_{ticker}")
-                    ]]),
+                    reply_markup=_report_button(ticker),
                 )
                 logger.info("earnings brief pushed for %s (%s)", ticker, event["signal"])
             except Exception as e:

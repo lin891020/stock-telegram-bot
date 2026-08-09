@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Iterator
 
 _FILE = Path("data/watchlist.json")
 
@@ -20,6 +21,28 @@ def _migrate_user(raw) -> dict:
     if isinstance(raw, list):
         return {t: t for t in raw}
     return raw if isinstance(raw, dict) else {}
+
+
+def iter_watchlists() -> Iterator[tuple[str, dict[str, str]]]:
+    """逐一走訪所有使用者的自選股，回傳 (user_id_str, {ticker: name})。
+
+    舊格式（list）的遷移只在 _migrate_user 一處處理。以前排程、推播、
+    財報偵測各自寫一份 isinstance 判斷，格式一改就得改四個地方，
+    漏掉的那個會靜默拿到空清單。
+    """
+    for user_id_str, raw in _load().items():
+        items = _migrate_user(raw)
+        if items:
+            yield user_id_str, items
+
+
+def all_tickers() -> list[str]:
+    """所有使用者自選股的聯集，保留加入順序。"""
+    seen: dict[str, None] = {}
+    for _, items in iter_watchlists():
+        for ticker in items:
+            seen[ticker] = None
+    return list(seen)
 
 
 def get_watchlist(user_id: int) -> list[str]:

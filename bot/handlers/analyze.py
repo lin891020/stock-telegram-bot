@@ -82,7 +82,7 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         for r in results
     ]
     await update.message.reply_text(
-        f"找到以下結果，請選擇：",
+        "找到以下結果，請選擇：",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
@@ -172,7 +172,7 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     except Exception as exc:
         logger.error("Analysis failed for %s/%s: %s", ticker, analysis_key, exc, exc_info=True)
-        await query.edit_message_text(f"❌ 分析失敗，請稍後再試")
+        await query.edit_message_text("❌ 分析失敗，請稍後再試")
 
 
 @register("analyze")
