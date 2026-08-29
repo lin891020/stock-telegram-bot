@@ -11,6 +11,7 @@ import logging
 from bot.prompts.earnings_report import (
     BRIEF_SYSTEM, FULL_SYSTEM, brief_prompt, full_prompt,
 )
+from bot.services.claim_audit import audit_note
 from bot.services.earnings import fetch_earnings_data
 from bot.services.evidence import EPS_ACTUAL, EPS_ESTIMATE, RELEASE, build_evidence
 from bot.services.filings import fetch_earnings_release
@@ -140,6 +141,7 @@ async def build_brief(ticker: str) -> tuple[str, object, str]:
 async def build_full_report(ticker: str) -> tuple[str, str]:
     """完整財報解讀（按鈕觸發，出 PDF）。回傳 (內容, label)。"""
     evidence, label, _ = await gather_earnings_evidence(ticker)
-    user = f"{evidence.to_prompt()}\n\n{full_prompt(label)}"
+    evidence_text = evidence.to_prompt()
+    user = f"{evidence_text}\n\n{full_prompt(label)}"
     content = await asyncio.to_thread(call_llm, FULL_SYSTEM, user)
-    return content, label
+    return content + audit_note(content, evidence_text), label

@@ -9,6 +9,7 @@ from bot.handlers.pending import ask, register
 from bot.services.stock import get_stock_summary, looks_like_ticker, search_ticker, is_taiwan_stock, clean_us_name
 from bot.services.tw_stocks import has_chinese, search_tw_stocks
 from bot.services.financials import get_financials
+from bot.services.claim_audit import audit_note
 from bot.services.evidence import build_evidence
 from bot.services.metrics import fetch_key_metrics
 from bot.services.llm import call_llm
@@ -160,6 +161,9 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
         content = await asyncio.to_thread(call_llm, _SYSTEM, user_msg)
+        # 稽核：報告裡既不在證據包、也推導不出來的數字，附在報告末尾。
+        # 刻意不改寫報告——改寫要用模型驗模型，會引入新的錯誤。
+        content += audit_note(content, evidence.to_prompt())
 
         # 手機上先看 5 行結論，完整報告在 PDF
         brief = _extract_brief(content)
