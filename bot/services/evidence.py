@@ -11,6 +11,8 @@
 """
 from dataclasses import dataclass, field
 
+from bot.services.consistency import check_financials
+
 # 需求描述 → 能滿足它的 fact key；空 tuple = 目前沒有任何資料源，必定缺漏
 _Requirement = tuple[str, tuple[str, ...]]
 
@@ -189,6 +191,11 @@ def build_evidence(
     stock_data = stock_data if isinstance(stock_data, dict) else {}
     financials = financials if isinstance(financials, dict) else {}
     metrics = metrics or {}
+
+    # 資料層檢查：抓「數字在證據包裡，但它是錯的」。證據包本身擋不住
+    # 我們自己餵錯數字——那種錯對模型是隱形的，它只會忠實引用假數字。
+    for problem in check_financials(financials, metrics):
+        ev.notes.append(f"⚠️ 資料自我矛盾：{problem}")
 
     # 公司名稱必須是事實。少了它，模型只拿到「2408」四個數字，
     # 只能從記憶猜公司——實測它把南亞科(2408)猜成聯電(2303)，整份報告寫錯公司。
