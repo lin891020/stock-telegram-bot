@@ -1,9 +1,9 @@
-python-telegram-bot[job-queue]==20.7
-anthropic==0.40.0
+python-telegram-bot[job-queue,rate-limiter]==22.8
+anthropic==1.2.0
 openai==1.57.0
-yfinance>=1.4.1
+yfinance>=1.7.0
 lxml>=5.0.0  # yfinance 的 earnings_dates 靠 pandas.read_html，沒它會整個拿不到 EPS
-httpx==0.25.2
+httpx>=0.27
 reportlab==4.2.5
 mplfinance>=0.12.10b0
 requests==2.32.3

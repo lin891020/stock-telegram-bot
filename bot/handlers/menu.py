@@ -3,7 +3,7 @@ from telegram.ext import ContextTypes
 
 from bot.auth import restrict_callback
 from bot.handlers.learn import _topics_keyboard, _load_lessons
-from bot.handlers.pending import ask
+from bot.handlers.pending import ask, clear_pending
 from bot.services.recent import get_recent
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -90,3 +90,16 @@ async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
             "📚 點主題直接看，或輸入 /learn <主題>：",
             reply_markup=_topics_keyboard(_load_lessons()),
         )
+
+
+async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """全域取消：清掉等待中的追問。
+
+    /finance 對話中的 /cancel 由 ConversationHandler 的 fallback 先接走，
+    走到這裡代表沒有進行中的對話。pending 現在會存到磁碟（跨重啟），
+    所以需要一個明確的出口，而不是只能等 180 秒過期。
+    """
+    if clear_pending(context):
+        await update.message.reply_text("已取消。")
+    else:
+        await update.message.reply_text("目前沒有進行中的操作。")

@@ -1,4 +1,5 @@
 import logging
+from typing import NamedTuple
 
 import httpx
 import anthropic as _anthropic
@@ -9,18 +10,27 @@ from bot.services.settings import get_saved_model, save_model
 anthropic = _anthropic
 logger = logging.getLogger(__name__)
 
-# Model registry: key → (display_name, provider)
-AVAILABLE_MODELS: dict[str, tuple[str, str]] = {
-    "claude-opus-4-8":            ("Opus 4.8（付費，最強推理）",       "anthropic"),
-    "claude-sonnet-4-6":          ("Sonnet 4.6（付費，高性價比）",     "anthropic"),
-    "claude-haiku-4-5-20251001":  ("Haiku 4.5（付費，最便宜）",       "anthropic"),
-    "gemini-3.5-flash":           ("Gemini 3.5 Flash（免費，快速）",   "gemini"),
-    "gemini-3.1-pro-preview":     ("Gemini 3.1 Pro（免費，深度）",    "gemini"),
-    "gpt-4o-mini":               ("GPT-4o Mini（免費，穩定）",       "github"),
+class ModelInfo(NamedTuple):
+    label: str        # 按鈕上顯示的名字
+    provider: str     # anthropic / gemini / github
+    note: str = ""    # 選單裡的一行說明（價格、適合什麼）
+
+
+# 模型代號用官方完整字串，不要自己加日期後綴（例如 claude-haiku-4-5，
+# 不是 claude-haiku-4-5-20251001）——加了會變成無效代號。
+AVAILABLE_MODELS: dict[str, ModelInfo] = {
+    "claude-opus-5":   ModelInfo("Opus 5",   "anthropic", "最強推理｜$5 / $25 每百萬 token"),
+    "claude-sonnet-5": ModelInfo("Sonnet 5", "anthropic", "高性價比｜$2 / $10（預設）"),
+    "claude-haiku-4-5": ModelInfo("Haiku 4.5", "anthropic", "最便宜最快｜$1 / $5"),
+    "gemini-3.5-flash": ModelInfo("Gemini 3.5 Flash", "gemini", "免費｜快速輕量"),
+    "gemini-3.1-pro-preview": ModelInfo("Gemini 3.1 Pro", "gemini", "免費（限額）｜深度推理"),
+    "gpt-4o-mini": ModelInfo("GPT-4o Mini", "github", "免費｜穩定備援"),
 }
 
-ANTHROPIC_ANALYSIS_MODEL = "claude-sonnet-4-6"
-ANTHROPIC_CHAT_MODEL = "claude-haiku-4-5-20251001"
+# 深度分析用 Sonnet 5：比舊的 Sonnet 4.6 又便宜（$2/$10 vs $3/$15）又更強，
+# 換過去沒有任何取捨。要更深的推理可以用 /model 切 Opus 5（同價位但能力更高）。
+ANTHROPIC_ANALYSIS_MODEL = "claude-sonnet-5"
+ANTHROPIC_CHAT_MODEL = "claude-haiku-4-5"
 GITHUB_MODEL = "gpt-4o-mini"
 GITHUB_BASE_URL = "https://models.inference.ai.azure.com"
 
@@ -52,7 +62,8 @@ def set_current_model(model_key: str) -> None:
 def call_llm(system: str, user: str, model: str | None = None) -> str:
     """Synchronous LLM call. Uses current selected model if model is None."""
     target = model or _current_model
-    _, provider = AVAILABLE_MODELS.get(target, ("", LLM_PROVIDER))
+    info = AVAILABLE_MODELS.get(target)
+    provider = info.provider if info else LLM_PROVIDER
 
     if provider == "anthropic":
         return _call_anthropic(system, user, target)
@@ -67,7 +78,8 @@ def call_llm_light(system: str, user: str) -> str:
     Anthropic provider 時固定用 Haiku 省成本（每天推播都會呼叫）；
     免費 provider（Gemini/GitHub）則照用目前選的模型。
     """
-    _, provider = AVAILABLE_MODELS.get(_current_model, ("", LLM_PROVIDER))
+    info = AVAILABLE_MODELS.get(_current_model)
+    provider = info.provider if info else LLM_PROVIDER
     if provider == "anthropic":
         return _call_anthropic(system, user, ANTHROPIC_CHAT_MODEL)
     return call_llm(system, user)

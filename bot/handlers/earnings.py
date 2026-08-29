@@ -115,9 +115,12 @@ async def earnings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
 
-    await update.message.reply_text(f"⏳ 正在查詢 {ticker} 財報資料...")
+    status = await update.message.reply_text(
+        f"⏳ 正在查詢 {ticker} 財報...\n抓 SEC 原文＋財務數據，約 20-30 秒"
+    )
     try:
         result, _ = await _run_earnings_analysis(ticker)
+        await status.delete()
         await send_long(
             context.bot, update.message.chat_id, result,
             reply_markup=_report_button(ticker),
@@ -135,7 +138,9 @@ async def earnings_pick_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
 
     ticker = query.data.replace("epick_", "", 1)
-    await query.edit_message_text(f"⏳ 正在查詢 {ticker} 財報資料...")
+    await query.edit_message_text(
+        f"⏳ 正在查詢 {ticker} 財報...\n抓 SEC 原文＋財務數據，約 20-30 秒"
+    )
     try:
         result, _ = await _run_earnings_analysis(ticker)
         await send_long(
@@ -200,7 +205,9 @@ async def earnings_report_callback(update: Update, context: ContextTypes.DEFAULT
     await query.answer()
 
     ticker = query.data[len("erpt_"):]
-    status = await query.message.reply_text(f"⏳ 正在整理 {ticker} 完整財報解讀...")
+    status = await query.message.reply_text(
+        f"⏳ 正在整理 {ticker} 完整財報解讀...\n六個章節＋PDF 排版，約 40-60 秒"
+    )
     try:
         content, label = await build_full_report(ticker)
         pdf_bytes = generate_pdf(label, "財報解讀", content)

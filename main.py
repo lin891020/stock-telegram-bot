@@ -1,11 +1,18 @@
 import asyncio
 import logging
+from datetime import time as dt_time, timezone
 from telegram import BotCommand
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler
+from telegram.ext import (
+    AIORateLimiter, Application, CallbackQueryHandler, CommandHandler, PicklePersistence,
+)
+
+from pathlib import Path
 
 from bot.config import TELEGRAM_BOT_TOKEN
 from bot.auth import build_auth_filter
-from bot.handlers.menu import start_handler, menu_callback_handler, help_handler
+from bot.handlers.menu import (
+    start_handler, menu_callback_handler, help_handler, cancel_handler,
+)
 from bot.handlers.analyze import build_analyze_handler
 from bot.handlers.learn import build_learn_handler
 from bot.handlers.finance import build_finance_handler
@@ -20,7 +27,8 @@ from bot.handlers.alert import build_alert_handler, check_alerts, check_big_move
 from bot.handlers.card import build_card_handlers
 from bot.handlers.market import build_market_handler
 from bot.handlers.chart import build_chart_handler
-from bot.handlers.health import build_health_handler
+from bot.handlers.errors import error_handler
+from bot.handlers.health import build_health_handler, health_watchdog
 from bot.services.tw_stocks import load_tw_stock_list
 from bot.handlers.earnings import build_earnings_handler, poll_earnings_announcements
 
@@ -31,6 +39,15 @@ logging.basicConfig(
 # httpx 的 INFO log 會把完整請求 URL 印出來，Telegram 的 URL 裡就含 bot token，
 # 等於把 token 明文寫進 journalctl。調到 WARNING 才能安全地把 log 給別人看。
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+_PERSISTENCE_FILE = Path("data/ptb_state.pickle")
+
+# VM 跑 UTC，排程時間一律照既有慣例明確換算（見 watch.py 的 _TAIPEI_UTC_OFFSET）
+_TAIPEI_UTC_OFFSET = 8
+
+
+def _taipei(hour: int, minute: int = 0) -> dt_time:
+    return dt_time(hour=(hour - _TAIPEI_UTC_OFFSET) % 24, minute=minute, tzinfo=timezone.utc)
 
 async def _post_init(application) -> None:
     await asyncio.to_thread(load_tw_stock_list)
@@ -50,13 +67,32 @@ async def _post_init(application) -> None:
         BotCommand("finance",   "💰 個人財務教練"),
         BotCommand("model",     "🤖 切換 AI 模型"),
         BotCommand("health",    "🩺 檢查資料源狀態"),
+        BotCommand("cancel",    "✖️ 取消目前操作"),
         BotCommand("help",      "❓ 使用說明"),
     ])
 
 
 def main() -> None:
     auth = build_auth_filter()
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(_post_init).build()
+    app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .post_init(_post_init)
+        # 預設是「一次處理一個 update」——/analyze 跑 30-60 秒期間，
+        # 你打任何指令都不是變慢，是排在後面等。
+        # ⚠️ /finance 是 ConversationHandler，官方建議並行時要小心；
+        # 單使用者情境不會同時走兩條對話，風險可接受。
+        .concurrent_updates(True)
+        # 晨報一次會送好幾則（send_long 切段），主動節流避免撞上 Telegram 限速
+        .rate_limiter(AIORateLimiter())
+        # user_data 存磁碟：/finance 五階段問卷、pending 追問都在裡面，
+        # 而我們的部署流程就是 ssh + restart，不存就是每次部署都清空
+        .persistence(PicklePersistence(filepath=str(_PERSISTENCE_FILE)))
+        .build()
+    )
+
+    # 所有 handler 都沒接住的例外最後由這裡兜底，避免「訊息就是沒來」
+    app.add_error_handler(error_handler)
 
     app.add_handler(CommandHandler("start", start_handler, filters=auth))
     app.add_handler(CommandHandler("help", help_handler, filters=auth))
@@ -73,6 +109,10 @@ def main() -> None:
 
     for handler in build_model_handler(auth):
         app.add_handler(handler)
+
+    # 註冊在 finance 的 ConversationHandler 之後：對話進行中的 /cancel
+    # 會先被對話的 fallback 接走，其餘情況才落到這個全域取消
+    app.add_handler(CommandHandler("cancel", cancel_handler, filters=auth))
 
     app.add_handler(build_price_handler(auth))
     app.add_handler(build_market_handler(auth))
@@ -105,6 +145,11 @@ def main() -> None:
     app.job_queue.run_repeating(check_big_moves, interval=600, first=90, name="big_move_check")
     # 財報公布偵測：每小時掃所有自選股（要打 yfinance，不宜太密）
     app.job_queue.run_repeating(poll_earnings_announcements, interval=3600, first=120, name="earnings_poll")
+    # 每日巡檢：七項檢查有紅燈才推播，全綠時安靜。
+    # /health 要「想到去打」才會知道，但沒人會沒事去打它——lxml 那次
+    # 就是這樣靜靜壞了兩個月。
+    # 排在晨報（06:30）之前：真的有東西壞了，你會在讀報告的同時就知道
+    app.job_queue.run_daily(health_watchdog, time=_taipei(6, 0), name="health_watchdog")
 
     logging.getLogger(__name__).info("Bot started, polling...")
     app.run_polling()

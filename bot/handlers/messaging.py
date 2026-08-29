@@ -30,10 +30,19 @@ def split_message(text: str, limit: int = MAX_MSG_LEN) -> list[str]:
     return chunks
 
 
+def _paginate(chunks: list[str]) -> list[str]:
+    """兩段以上就標頁碼。長報告分批到達時，看不到頁碼就分不出
+    「這樣就完了」還是「後面還沒到／掉了」。"""
+    if len(chunks) < 2:
+        return chunks
+    total = len(chunks)
+    return [f"{chunk}\n\n— {i}/{total} —" for i, chunk in enumerate(chunks, 1)]
+
+
 async def send_long(bot, chat_id: int, text: str, parse_mode: str = None,
                     reply_markup=None) -> None:
     """訊息過長時自動切分。按鈕只掛在最後一段，否則會出現在半截訊息下面。"""
-    chunks = split_message(text)
+    chunks = _paginate(split_message(text))
     for index, chunk in enumerate(chunks):
         await bot.send_message(
             chat_id=chat_id,
@@ -44,5 +53,5 @@ async def send_long(bot, chat_id: int, text: str, parse_mode: str = None,
 
 
 async def reply_long(message, text: str, parse_mode: str = None) -> None:
-    for chunk in split_message(text):
+    for chunk in _paginate(split_message(text)):
         await message.reply_text(chunk, parse_mode=parse_mode)
