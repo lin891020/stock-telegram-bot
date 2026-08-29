@@ -3,8 +3,8 @@
 > 個人專屬的 AI 股票分析 Telegram 機器人，支援台股與美股深度分析、財報速覽、投資學習、個人財務教練。
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
-![python-telegram-bot](https://img.shields.io/badge/python--telegram--bot-20.7-2CA5E0?logo=telegram&logoColor=white)
-![Claude](https://img.shields.io/badge/AI-Claude%20Sonnet-8B5CF6?logo=anthropic&logoColor=white)
+![python-telegram-bot](https://img.shields.io/badge/python--telegram--bot-22.8-2CA5E0?logo=telegram&logoColor=white)
+![Claude](https://img.shields.io/badge/AI-Claude%20Sonnet%205-8B5CF6?logo=anthropic&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
@@ -27,6 +27,7 @@
 | `/learn <主題>` | 投資觀念教學（ETF、複利、資產配置…） |
 | `/finance` | 個人財務教練（5 階段對話，生成客製化理財建議） |
 | `/model` | 切換 AI 模型（Claude / Gemini / GPT） |
+| `/cancel` | 取消目前等待中的操作 |
 | `/health` | 七項健康檢查：yfinance / TWSE / SEC EDGAR / FinMind / lxml / PDF 字型 / AI 模型 |
 | `/help` | 使用說明 |
 
@@ -45,6 +46,7 @@
 | 盤中每 10 分鐘 | **自選台股漲停／跌停**、**自選美股單日漲跌超過 10%**（同一天同方向只推一次） |
 | 盤中每 10 分鐘 | `/alert` 設定的到價提醒（觸發後自動移除） |
 | 每小時 | **所有自選股**的財報公布偵測：公布後自動推一份 5 行速覽，附 `📄 完整報告` 按鈕 |
+| 每天 06:00 | **系統巡檢**：七項檢查有紅燈才推播，全綠時安靜 |
 
 漲跌停判定是照台股檔位算出實際限價（例如前收 1090 → 漲停 1195，只有 +9.63%），不是用「漲超過 9.5%」近似。
 
@@ -110,7 +112,12 @@ EDGAR 是第一手、公司送件當下就有，而且觸發的同時就把報�
 - **用錯欄位名** — FinMind 沒有 `NetIncome` 這個型別（正確的是 `IncomeAfterTaxes`），
   拿錯名字只會回空陣列，台股年度淨利就一直是缺的
 
-所以 `/health` 檢查的不只是「網路通不通」，而是每一條真正會靜默斷掉的線。
+所以 `/health` 檢查的不只是「網路通不通」，而是每一條真正會靜默斷掉的線，
+而且**每天早上 06:00 自動跑一次**——有紅燈才推播，全綠時安靜。
+只靠「想到才去打 /health」是沒用的，沒人會沒事去打它。
+
+另外掛了 PTB 的全域 error handler：任何 handler 沒接住的例外都會回一則訊息給你，
+而不是讓「訊息就是沒來」跟「bot 掛了」長得一模一樣。
 
 狀態檔（自選股、提醒、財報基準）走 `bot/services/store.py` 的原子寫入：
 先寫暫存檔、`fsync`、再 `os.replace`。以前是「先清空再寫」，
@@ -183,15 +190,20 @@ python main.py
 
 使用 `/model` 指令切換，或設定 `LLM_PROVIDER`：
 
-| 模型 | 提供者 | 費用 | 說明 |
+| 模型 | 提供者 | 每百萬 token | 說明 |
 |------|--------|------|------|
-| `claude-sonnet-4-6` | Anthropic | 付費 | 深度分析（預設） |
-| `claude-opus-4-8` | Anthropic | 付費 | 最強推理 |
+| `claude-sonnet-5` | Anthropic | $2 / $10 | 深度分析（預設） |
+| `claude-opus-5` | Anthropic | $5 / $25 | 最強推理 |
+| `claude-haiku-4-5` | Anthropic | $1 / $5 | 最便宜最快 |
 | `gemini-3.5-flash` | Google | 免費 | 快速輕量 |
 | `gemini-3.1-pro-preview` | Google | 免費（限額） | 深度推理 |
 | `gpt-4o-mini` | GitHub Models | 免費 | 穩定備援 |
 
-每日晨報的新聞摘要為低難度任務：使用 Anthropic 時自動改用 Haiku 以節省成本，免費模型則照常使用。
+`/model` 選的是**深度分析**用的模型。每日晨報的新聞摘要屬低難度任務，
+固定用 Haiku 省成本（每天都跑），不受這裡影響。
+
+模型代號用官方完整字串，不要自己加日期後綴（`claude-haiku-4-5`，
+不是 `claude-haiku-4-5-20251001`）——加了會變成無效代號。
 
 ---
 
@@ -251,7 +263,7 @@ sudo systemctl enable stock-bot && sudo systemctl start stock-bot
 ## 開發
 
 ```bash
-# 執行測試（135 項）
+# 執行測試（140 項）
 pytest tests/ -v
 
 # 查看 log（VM 上）
@@ -269,14 +281,14 @@ sudo journalctl -u stock-bot -f
 ```
 stock-telegram-bot/
 ├── bot/
-│   ├── handlers/       # Telegram 指令處理器
+│   ├── handlers/       # Telegram 指令處理器、全域錯誤處理、健康巡檢
 │   ├── services/       # 外部 API 整合、證據包、狀態存取（store.py）
 │   ├── prompts/        # 分析師 Prompt 模板
 │   └── content/        # 預寫投資教學內容
 ├── scripts/
 │   ├── download_font.py        # 下載中文字型
 │   └── stock-bot.service       # systemd 服務設定
-├── data/               # 自選股、提醒、財報基準（gitignored，不進版控）
+├── data/               # 自選股、提醒、財報基準、對話狀態（gitignored）
 ├── tests/
 ├── main.py
 └── .env.example
