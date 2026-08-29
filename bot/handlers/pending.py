@@ -55,6 +55,15 @@ def clear_pending(context) -> bool:
     return context.user_data.pop("pending", None) is not None
 
 
+async def drop_stale_pending(update, context) -> None:
+    """任何指令進來就丟掉等待中的追問（註冊在 group -1，比指令本身先跑）。
+
+    ask() 是在 group 0 由指令本身呼叫的，所以「/watch 追問 → 設 pending」
+    不會被自己清掉；被清掉的只有「問了卻改去打別的指令」那種情況。
+    """
+    clear_pending(context)
+
+
 async def dispatch_pending(update, context) -> bool:
     """若有有效的 pending action 就執行。回傳是否已處理。"""
     pending = pop_pending(context)

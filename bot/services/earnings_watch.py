@@ -42,31 +42,60 @@ def latest_reported_date(data: dict) -> Optional[str]:
     return max(dates) if dates else None
 
 
-def detect_new_report(ticker: str, data: dict) -> Optional[str]:
-    """比對基準，回傳新公布的財報日；首次建立基準時回 None（不推播）。"""
-    return _advance("last_reported", ticker, latest_reported_date(data))
+# 兩條訊號各自的「已推播到哪一季」基準。commit_event 會同時推進兩個——
+# 只推進觸發的那一條，另一條下一輪就會對同一季再推一次。
+_EVENT_FIELDS = ("last_filing", "last_reported")
 
 
-def _advance(field: str, ticker: str, latest: Optional[str]) -> Optional[str]:
-    """共用的「基準往前推」邏輯：只有真的變新才回傳，首次見到只記基準。"""
-    if not latest:
-        return None
+def _peek(field: str, ticker: str) -> Optional[str]:
+    return (_load().get(ticker) or {}).get(field)
 
+
+def _set(field: str, ticker: str, value: str) -> None:
     state = _load()
     entry = state.get(ticker) or {}
-    known = entry.get(field)
-    if known == latest:
-        return None
-
-    entry[field] = latest
+    entry[field] = value
     entry["updated"] = str(date.today())
     state[ticker] = entry
     _save(state)
 
-    # 沒有基準（第一次見到）或資料往回跳，都不推播
-    if known is None or latest <= known:
-        return None
-    return latest
+
+def _is_new(field: str, ticker: str, latest: Optional[str]) -> bool:
+    """latest 是否比基準新。沒有基準時只建基準並回 False（不推播）。
+
+    第一次看到某支股票就推播的話，上線當下會把所有舊財報全推一遍。
+    """
+    if not latest:
+        return False
+    known = _peek(field, ticker)
+    if known is None:
+        _set(field, ticker, latest)
+        return False
+    return latest > known
+
+
+def detect_new_report(ticker: str, data: dict) -> Optional[str]:
+    """比對基準，回傳新公布的財報日；首次建立基準時回 None（不推播）。
+
+    ⚠️ 只偵測，不推進基準——推進要等推播真的成功，由 commit_event 做。
+    以前是偵測時就寫死基準，只要接下來的 build_brief 出錯（LLM 逾時、
+    SEC 限流），那一季的財報就永遠不會再被推播了。
+    """
+    latest = latest_reported_date(data)
+    return latest if _is_new("last_reported", ticker, latest) else None
+
+
+def commit_event(ticker: str, event_date: str) -> None:
+    """推播成功後才推進基準；兩條訊號一起推進。
+
+    SEC 申報與 yfinance 的 EPS 更新講的是同一季，但基準各記各的。
+    只推進觸發的那一條，另一條會在下一輪對同一季再推一次
+    ——實測 SEC 先推一次、一小時後 EPS 又推一次。
+    """
+    for field in _EVENT_FIELDS:
+        known = _peek(field, ticker)
+        if known is None or event_date > known:
+            _set(field, ticker, event_date)
 
 
 def _newest_filing_date(ticker: str) -> Optional[str]:
@@ -76,10 +105,6 @@ def _newest_filing_date(ticker: str) -> Optional[str]:
         return None
     filings = list_filings(cik, EARNINGS_FORMS, limit=1)
     return filings[0]["date"] if filings else None
-
-
-def _peek_seen(ticker: str) -> Optional[str]:
-    return (_load().get(ticker) or {}).get("last_seen_filing")
 
 
 async def detect_new_filing(ticker: str) -> Optional[str]:
@@ -100,14 +125,16 @@ async def detect_new_filing(ticker: str) -> Optional[str]:
         return None
     # 大部分 8-K 不是財報（人事、協議、交車數量），所以 last_seen 與
     # last_filing 要分開記：前者是閘門，後者才是真正的財報基準。
-    if newest == _peek_seen(ticker):
+    if newest == _peek("last_seen_filing", ticker):
         return None
-    _advance("last_seen_filing", ticker, newest)
+    # 閘門立即推進：它只表示「這份申報我已經檢查過了」，與推播成功無關。
+    # 大部分 8-K 不是財報，不推進的話每輪都要重掃 10-20 個 SEC 請求。
+    _set("last_seen_filing", ticker, newest)
 
     release = await asyncio.to_thread(fetch_earnings_release, ticker)
     if not release:
         return None
-    return _advance("last_filing", ticker, release["filed"])
+    return release["filed"] if _is_new("last_filing", ticker, release["filed"]) else None
 
 
 async def detect_earnings_event(ticker: str) -> Optional[dict]:

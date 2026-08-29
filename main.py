@@ -3,7 +3,8 @@ import logging
 from datetime import time as dt_time, timezone
 from telegram import BotCommand
 from telegram.ext import (
-    AIORateLimiter, Application, CallbackQueryHandler, CommandHandler, PicklePersistence,
+    AIORateLimiter, Application, CallbackQueryHandler, CommandHandler,
+    MessageHandler, PicklePersistence, filters,
 )
 
 from pathlib import Path
@@ -28,6 +29,7 @@ from bot.handlers.card import build_card_handlers
 from bot.handlers.market import build_market_handler
 from bot.handlers.chart import build_chart_handler
 from bot.handlers.errors import error_handler
+from bot.handlers.pending import drop_stale_pending
 from bot.handlers.health import build_health_handler, health_watchdog
 from bot.services.tw_stocks import load_tw_stock_list
 from bot.handlers.earnings import build_earnings_handler, poll_earnings_announcements
@@ -93,6 +95,13 @@ def main() -> None:
 
     # 所有 handler 都沒接住的例外最後由這裡兜底，避免「訊息就是沒來」
     app.add_error_handler(error_handler)
+
+    # group -1 先跑：任何指令都先丟掉等待中的追問。
+    # 否則「/watch → 改用 /price → 之後打『台積電』」會被 watch 的
+    # pending 吃掉，變成加入自選股而不是查卡片。
+    app.add_handler(
+        MessageHandler(filters.COMMAND & auth, drop_stale_pending), group=-1
+    )
 
     app.add_handler(CommandHandler("start", start_handler, filters=auth))
     app.add_handler(CommandHandler("help", help_handler, filters=auth))

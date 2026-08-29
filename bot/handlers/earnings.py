@@ -10,7 +10,9 @@ from bot.config import ALLOWED_TELEGRAM_ID
 from bot.handlers.messaging import send_long
 from bot.handlers.pending import ask, register
 from bot.services.earnings import fetch_earnings_data
-from bot.services.earnings_watch import all_watchlist_tickers, detect_earnings_event, prune_state
+from bot.services.earnings_watch import (
+    all_watchlist_tickers, commit_event, detect_earnings_event, prune_state,
+)
 from bot.services.earnings_report import build_brief, build_full_report
 from bot.services.formatting import safe_filename
 from bot.services.pdf import generate_pdf
@@ -191,6 +193,9 @@ async def poll_earnings_announcements(context: ContextTypes.DEFAULT_TYPE) -> Non
                     f"{brief}{missing_note}",
                     reply_markup=_report_button(ticker),
                 )
+                # 推播成功才推進基準。順序反過來的話，build_brief 一出錯
+                # （LLM 逾時、SEC 限流）那一季就永遠不會再被推播了。
+                commit_event(ticker, event["date"])
                 logger.info("earnings brief pushed for %s (%s)", ticker, event["signal"])
             except Exception as e:
                 logger.error("earnings push failed for %s: %s", ticker, e, exc_info=True)

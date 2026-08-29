@@ -82,3 +82,16 @@ def test_clear_pending():
     ctx.user_data["pending"] = {"action": "price", "expires": time.time() + 60}
     assert clear_pending(ctx) is True
     assert pop_pending(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_command_drops_stale_pending():
+    """「/watch 追問 → 改去打 /price → 之後打『台積電』」
+
+    以前那句台積電會被 watch 的 pending 吃掉，變成加入自選股而不是查卡片。
+    """
+    from bot.handlers.pending import drop_stale_pending
+    ctx = FakeContext()
+    ctx.user_data["pending"] = {"action": "watch", "expires": time.time() + 180}
+    await drop_stale_pending("fake-update", ctx)
+    assert pop_pending(ctx) is None
