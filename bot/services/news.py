@@ -95,13 +95,59 @@ def _is_fresh(item: dict) -> bool:
     return True  # unknown age → keep
 
 
-def _fetch_news(ticker: str) -> list[dict]:
-    """Return up to 5 fresh (< 48 h) news items as [{title, url}]."""
+# 公司名稱裡不具識別度的字，不拿來當比對詞
+_GENERIC = {
+    "the", "and", "inc", "ltd", "llc", "plc", "corp", "corporation", "company",
+    "limited", "holdings", "holding", "group", "technologies", "technology",
+    "international", "industries", "electronics", "co",
+}
+
+
+def _match_terms(ticker: str, name: str) -> set[str]:
+    """判斷一則標題是否真的在講這家公司時，可接受的比對詞。
+
+    包含代號、公司名的實詞，以及首字母縮寫——yfinance 的標題寫
+    「TSMC」而不是「Taiwan Semiconductor Manufacturing」。
+    """
+    terms = {ticker.lower()}
+    if name:
+        terms.add(name.lower())
+        words = [w for w in re.findall(r"[A-Za-z]{2,}", name) if w.lower() not in _GENERIC]
+        terms.update(w.lower() for w in words if len(w) >= 4)
+        # 前 N 個字的縮寫：Taiwan Semiconductor Manufacturing → TSM、TSMC…
+        for n in range(2, min(len(words), 5) + 1):
+            terms.add("".join(w[0] for w in words[:n]).lower())
+    return {t for t in terms if len(t) >= 3}
+
+
+def _is_about(title: str, terms: set[str]) -> bool:
+    lowered = title.lower()
+    return any(t in lowered for t in terms)
+
+
+def _fetch_news(ticker: str, name: str = "") -> list[dict]:
+    """Return up to 5 fresh (< 48 h) news items as [{title, url}].
+
+    只留標題真的提到這家公司的。yfinance 對 2330.TW 回傳的五則裡有
+    三則是 NVIDIA 和 Cisco 的——而 prompt 又要求「不要提及其他公司
+    名稱」，模型於是把 NVIDIA 的內容改寫成台積電的樣子送到晨報裡。
+    該由程式擋掉的東西，不要留給模型判斷。
+    """
     yf_ticker = f"{ticker}.TW" if is_taiwan_stock(ticker) else ticker
+    terms = _match_terms(ticker, name)
     try:
         stock = yf.Ticker(yf_ticker)
+        # 台股的名稱是中文（「台積電」），但 yfinance 的標題是英文，
+        # 只用中文名比對會把所有新聞濾光。補上英文名才有得比。
+        if not re.search(r"[A-Za-z]", name or ""):
+            try:
+                info = stock.info or {}
+                terms |= _match_terms(ticker, info.get("longName") or info.get("shortName") or "")
+            except Exception:
+                pass
         raw = stock.news or []
         items = []
+        dropped = 0
         for item in raw:
             if not _is_fresh(item):
                 continue
@@ -116,23 +162,29 @@ def _fetch_news(ticker: str) -> list[dict]:
             else:
                 title = item.get("title", "")
                 url = item.get("link", "")
-            if title:
-                items.append({"title": title, "url": url})
+            if not title:
+                continue
+            if terms and not _is_about(title, terms):
+                dropped += 1
+                continue
+            items.append({"title": html.unescape(title), "url": url})
             if len(items) >= 5:
                 break
+        if dropped:
+            logger.info("news: %s 濾掉 %d 則不是在講這家公司的標題", ticker, dropped)
         return items
     except Exception as e:
         logger.warning("News fetch failed for %s: %s", ticker, e)
         return []
 
 
-def _build_news_data(tickers: list[str]) -> dict:
+def _build_news_data(tickers: list[str], names: dict[str, str]) -> dict:
     """{ticker: [{title, url}]}。
 
     以前這裡還順手拼一份給 LLM 的標題區塊，但呼叫端從來沒用過那個回傳值
     ——真正餵給模型的區塊是後面依 active 清單重拼的。
     """
-    return {ticker: _fetch_news(ticker) for ticker in tickers}
+    return {t: _fetch_news(t, names.get(t, "")) for t in tickers}
 
 
 def _parse_llm_sections(text: str, tickers: list[str]) -> dict[str, str]:
@@ -152,11 +204,16 @@ def _parse_llm_sections(text: str, tickers: list[str]) -> dict[str, str]:
 
 async def fetch_and_summarize(tickers: list[str]) -> str:
     """自選股快報（HTML）：行情總覽（異動排前）→ 重點分析（有新聞或大漲跌）→ 無大事收合。"""
-    news_data_task = asyncio.to_thread(_build_news_data, tickers)
-    price_tasks = [get_stock_summary(t) for t in tickers]
-
-    news_items, *price_results = await asyncio.gather(news_data_task, *price_tasks)
+    # 先抓報價：新聞過濾要用公司名稱比對標題，而名稱在報價結果裡。
+    # 多一個往返，但晨報一天只跑一次，換來的是不會把別家公司的新聞
+    # 摘要成這家的。
+    price_results = await asyncio.gather(*[get_stock_summary(t) for t in tickers])
     prices = {t: data for t, data in zip(tickers, price_results)}
+    names = {
+        t: (prices[t].get("name") or "") if isinstance(prices[t], dict) else ""
+        for t in tickers
+    }
+    news_items = await asyncio.to_thread(_build_news_data, tickers, names)
 
     def _sort_key(t: str):
         pct = _day_pct(prices.get(t, {}))
@@ -199,8 +256,9 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
 - 每支股票以 [代號] 開頭（例如 [2408]、[MU]）
 - 純文字，不要使用 # ## ** 等符號
 - 影響方向用：▲ 正面 / ▼ 負面 / ● 中性
-- 只分析該股票本身，不要提及其他公司名稱
-- 若新聞內容與該股票無直接關聯，輸出「（本日無直接相關新聞）」
+- 只能根據上面列出的標題寫，不得補充標題以外的資訊
+- 標題若主要在講別家公司，就當作沒有這則，不要改寫成這家公司的說法
+- 沒有任何一則與該股票直接相關時，整段只輸出「（本日無直接相關新聞）」
 
 {news_block}"""
 

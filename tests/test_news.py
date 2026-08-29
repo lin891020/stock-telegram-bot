@@ -79,3 +79,53 @@ def test_no_date_when_it_is_missing():
     from bot.services.news import _price_overview
     out = _price_overview(["2330"], ["NVDA"], {"2330": _tw(""), "NVDA": _us()})
     assert "收盤）" not in out
+
+
+# ---- 新聞歸屬過濾 -------------------------------------------------------
+
+def test_drops_headlines_about_other_companies():
+    """yfinance 對 2330.TW 回傳的五則裡有三則是 NVIDIA 和 Cisco 的。
+
+    而 prompt 又寫著「不要提及其他公司名稱」——模型於是把 NVIDIA 的
+    內容改寫成台積電的說法送進晨報。該由程式擋掉的，不要留給模型判斷。
+    """
+    from bot.services.news import _is_about, _match_terms
+    terms = _match_terms("2330", "Taiwan Semiconductor Manufacturing Company Limited")
+
+    assert not _is_about("Nvidia Quietly Became Its Own Market Category", terms)
+    assert not _is_about("Morgan Stanley reveals Cisco's quiet edge over rivals", terms)
+    assert _is_about("Billionaire Druckenmiller Just Bought Taiwan Semiconductor Stock", terms)
+
+
+def test_matches_acronyms_used_in_headlines():
+    """標題寫「TSMC」，公司全名卻是 Taiwan Semiconductor Manufacturing。"""
+    from bot.services.news import _is_about, _match_terms
+    terms = _match_terms("2330", "Taiwan Semiconductor Manufacturing Company Limited")
+    assert _is_about("How TSMC is Advancing its A14 Technology Roadmap", terms)
+
+
+def test_generic_company_words_are_not_match_terms():
+    """「Company」「Limited」「Group」這種字比對到等於沒過濾。"""
+    from bot.services.news import _match_terms
+    terms = _match_terms("XYZ", "Example Holdings Company Limited")
+    assert "company" not in terms and "limited" not in terms and "holdings" not in terms
+
+
+def test_ticker_alone_is_enough_to_match():
+    from bot.services.news import _is_about, _match_terms
+    terms = _match_terms("NVDA", "NVIDIA")
+    assert _is_about("Jim Cramer on NVIDIA Corporation (NASDAQ:NVDA)", terms)
+
+
+def test_no_name_means_no_filtering():
+    """名稱拿不到時不過濾——寧可讓使用者自己看標題，也不要全部消失。"""
+    from bot.services.news import _match_terms
+    terms = _match_terms("2330", "")
+    assert terms == {"2330"}
+
+
+def test_html_entities_in_titles_are_decoded():
+    """yfinance 的標題帶 &#x27;，直接 html.escape 會變成 &amp;#x27; 顯示出來。"""
+    import html
+    raw = "Elon Musk Calls Gavin Newsom&#x27;s Plan"
+    assert html.unescape(raw) == "Elon Musk Calls Gavin Newsom's Plan"
