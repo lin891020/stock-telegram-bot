@@ -41,9 +41,27 @@ def _price_line(ticker: str, stock_data: dict) -> str:
     return f"{lbl}  {price:,.2f}  {arrow} {sign}{pct:.2f}%{warn}"
 
 
+def _tw_as_of(tw: list[str], prices: dict) -> str:
+    """台股區塊的資料日期，例如「（8/28 收盤）」。
+
+    晨報這一行是每天都會看的東西，卻是整個 bot 裡最含糊的地方——
+    台股走 TWSE 盤後結算，這裡卻只印一個裸數字，看起來跟旁邊接近
+    即時的美股一模一樣。日期掛在區塊標題上，比每行都掛更省版面。
+    """
+    stamps = {
+        (prices.get(t, {}).get("date") or "")[:10].replace("-", "/")
+        for t in tw
+    }
+    stamps = {s for s in stamps if len(s) == 10}
+    if len(stamps) != 1:
+        return ""
+    stamp = stamps.pop()
+    return f"（{int(stamp[5:7])}/{int(stamp[8:10])} 收盤）"
+
+
 def _price_overview(tw: list[str], us: list[str], prices: dict) -> str:
     """行情總覽：台股、美股分兩區塊。只有單一市場時不加標題（避免多餘的一行）。"""
-    groups = [("🇹🇼 台股", tw), ("🇺🇸 美股", us)]
+    groups = [(f"🇹🇼 台股{_tw_as_of(tw, prices)}", tw), ("🇺🇸 美股", us)]
     show_headers = bool(tw) and bool(us)
 
     sections = []
