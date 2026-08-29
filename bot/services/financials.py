@@ -50,8 +50,31 @@ def _recent_years(grouped: dict, limit: int = 3) -> list[str]:
     return sorted(sorted(grouped, reverse=True)[:limit])
 
 
+def _annual_cumulative(rows: list, value_col: str, label_col: str = "date") -> dict:
+    """年初至今累計項目（現金流量表）：取每年最後一期，**不能加總**。
+
+    FinMind 同一個 API 有兩種語意，而且沒有任何欄位標明：
+      損益表   TaiwanStockFinancialStatements   → 單季數，要加總
+      現金流量表 TaiwanStockCashFlowsStatement  → 年初至今累計數
+
+    實測台積電 2024 營業現金流：Q1 4,363 億、H1 8,140、9M 12,060、
+    FY 18,262（逐列遞增的累計數）。四列相加得到 4.28 兆，
+    真實全年是 1.83 兆——虛報 2.3 倍，而且每份台股分析都吃到這個數字。
+
+    損益表看起來也像逐列遞增，那只是台積電剛好每季成長，不是累計：
+    四季相加 2.89 兆，正好等於實際全年營收。
+    """
+    grouped = _by_year(rows, value_col, label_col)
+    result = {}
+    for year in _recent_years(grouped):
+        stamp, value = max(grouped[year], key=lambda x: x[0])
+        label = year if stamp[5:10] == "12-31" else f"{year}（截至 {stamp[5:10]} 累計，非全年）"
+        result[label] = value
+    return result
+
+
 def _annual_flow(rows: list, value_col: str, label_col: str = "date") -> dict:
-    """流量項目（營收、淨利、現金流）：同年度的季報**加總**才是年度數字。
+    """流量項目（營收、淨利）：同年度的季報**加總**才是年度數字。
 
     FinMind 回傳的是單季數字。這裡以前直接取「每年最後一筆」當年度值，
     等於拿某一季冒充整年——實測讓模型拿 2024Q4 比 2026Q2，
@@ -130,8 +153,15 @@ async def fetch_taiwan_financials(ticker: str) -> dict:
     tax = extract_flow(income_annual, "TAX")
     eps = extract_flow(income_annual, "EPS")
 
-    operating_cf = extract_flow(cashflow_annual, "CashFlowsFromOperatingActivities")
-    capex = extract_flow(cashflow_annual, "AcquisitionOfPropertyPlantAndEquipment")
+    # 現金流量表是累計數，取每年最後一期；不可用 extract_flow 加總
+    def extract_cumulative(rows: list, type_val: str, value_col: str = "value") -> dict:
+        return _annual_cumulative([r for r in rows if r.get("type") == type_val], value_col)
+
+    operating_cf = extract_cumulative(cashflow_annual, "CashFlowsFromOperatingActivities")
+    # 型別名稱是 PropertyAndPlantAndEquipment；寫錯名字只會靜默回空陣列，
+    # 報告就變成「本次資料未提供資本支出」——跟當初 NetIncome 一模一樣的坑。
+    # 值是負數（現金流出），照抄不轉正號。
+    capex = extract_cumulative(cashflow_annual, "PropertyAndPlantAndEquipment")
 
     revenue_q = extract_metric_quarterly(income_quarterly, "Revenue")
     net_income_q = extract_metric_quarterly(income_quarterly, "IncomeAfterTaxes")
@@ -315,7 +345,7 @@ def format_financials_for_prompt(data: dict) -> str:
         f"總負債：{fmt_dict(annual.get('total_liabilities', {}))}",
         f"股東權益：{fmt_dict(annual.get('equity', {}))}",
         f"營業現金流：{fmt_dict(annual.get('operating_cashflow', {}))}",
-        f"資本支出：{fmt_dict(annual.get('capex', {}))}",
+        f"資本支出（負數＝現金流出）：{fmt_dict(annual.get('capex', {}))}",
         "",
         "【季度數據 - 近4季】",
         f"營收：{fmt_list(quarterly.get('revenue', []))}",
