@@ -31,8 +31,9 @@ def _menu_text() -> str:
             lines.append(f"{mark}{info.label} — {info.note}")
         lines.append("")
     lines.append(
-        f"ℹ️ 這裡選的是**深度分析**用的模型。晨報新聞摘要固定用 "
-        f"{_model_name(ANTHROPIC_CHAT_MODEL)}（每天都跑，省成本），不受這裡影響。"
+        f"ℹ️ 這裡選的是**分析與財報報告**用的模型。"
+        f"/finance 與 /learn 固定用 {_model_name(ANTHROPIC_CHAT_MODEL)} 省成本，"
+        f"晨報則完全不經過模型（只列新聞標題），兩者都不受這裡影響。"
     )
     return "\n".join(lines)
 

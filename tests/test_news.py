@@ -160,8 +160,11 @@ def test_news_pipeline_makes_no_llm_call(monkeypatch):
 
     改成只列標題之後，這條路徑不該再碰模型。
     """
-    import bot.services.news as news_mod
-    assert not hasattr(news_mod, "call_llm_light"), "news 不應再依賴 LLM"
     import inspect
-    src = inspect.getsource(news_mod.fetch_and_summarize)
-    assert "call_llm" not in src
+    import bot.services.llm as llm_mod
+    import bot.services.news as news_mod
+
+    assert not hasattr(news_mod, "call_llm_light"), "news 不應再依賴 LLM"
+    assert "call_llm" not in inspect.getsource(news_mod.fetch_and_summarize)
+    # news 是 call_llm_light 唯一的消費者，移掉之後那個函式就是死碼
+    assert not hasattr(llm_mod, "call_llm_light"), "call_llm_light 已無人使用，應移除"

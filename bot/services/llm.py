@@ -30,6 +30,8 @@ AVAILABLE_MODELS: dict[str, ModelInfo] = {
 # 深度分析用 Sonnet 5：比舊的 Sonnet 4.6 又便宜（$2/$10 vs $3/$15）又更強，
 # 換過去沒有任何取捨。要更深的推理可以用 /model 切 Opus 5（同價位但能力更高）。
 ANTHROPIC_ANALYSIS_MODEL = "claude-sonnet-5"
+# /finance 與 /learn 用它：對話式教練與教學內容不需要主力模型的推理深度。
+# （晨報以前也走這裡，但新聞已改成只列標題、完全不呼叫 LLM。）
 ANTHROPIC_CHAT_MODEL = "claude-haiku-4-5"
 GITHUB_MODEL = "gpt-4o-mini"
 GITHUB_BASE_URL = "https://models.inference.ai.azure.com"
@@ -70,19 +72,6 @@ def call_llm(system: str, user: str, model: str | None = None) -> str:
     if provider == "gemini":
         return _call_gemini(system, user, target)
     return _call_github(system, user)
-
-
-def call_llm_light(system: str, user: str) -> str:
-    """低難度任務（新聞摘要、收盤速報等）。
-
-    Anthropic provider 時固定用 Haiku 省成本（每天推播都會呼叫）；
-    免費 provider（Gemini/GitHub）則照用目前選的模型。
-    """
-    info = AVAILABLE_MODELS.get(_current_model)
-    provider = info.provider if info else LLM_PROVIDER
-    if provider == "anthropic":
-        return _call_anthropic(system, user, ANTHROPIC_CHAT_MODEL)
-    return call_llm(system, user)
 
 
 def _get_anthropic_client():
