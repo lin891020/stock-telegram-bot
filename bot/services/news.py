@@ -151,10 +151,18 @@ def _fetch_news(ticker: str, name: str = "") -> list[dict]:
     名稱」，模型於是把 NVIDIA 的內容改寫成台積電的樣子送到晨報裡。
     該由程式擋掉的東西，不要留給模型判斷。
     """
-    yf_ticker = f"{ticker}.TW" if is_taiwan_stock(ticker) else ticker
+    # 台股先試上市（.TW）再試上櫃（.TWO）——跟 stock / charts / metrics /
+    # earnings / alert 一致。這裡以前只試 .TW，於是上櫃股票在晨報裡
+    # 永遠是「本日無相關新聞」，看起來跟真的沒新聞一模一樣。
+    candidates = [f"{ticker}.TW", f"{ticker}.TWO"] if is_taiwan_stock(ticker) else [ticker]
     terms = _match_terms(ticker, name)
     try:
-        stock = yf.Ticker(yf_ticker)
+        stock, raw = None, []
+        for symbol in candidates:
+            stock = yf.Ticker(symbol)
+            raw = stock.news or []
+            if raw:
+                break
         # 台股的名稱是中文（「台積電」），但 yfinance 的標題是英文，
         # 只用中文名比對會把所有新聞濾光。補上英文名才有得比。
         if not re.search(r"[A-Za-z]", name or ""):
@@ -163,7 +171,6 @@ def _fetch_news(ticker: str, name: str = "") -> list[dict]:
                 terms |= _match_terms(ticker, info.get("longName") or info.get("shortName") or "")
             except Exception:
                 pass
-        raw = stock.news or []
         items = []
         dropped = 0
         for item in raw:

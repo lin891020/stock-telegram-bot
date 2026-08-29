@@ -168,3 +168,73 @@ def test_news_pipeline_makes_no_llm_call(monkeypatch):
     assert "call_llm" not in inspect.getsource(news_mod.fetch_and_summarize)
     # news 是 call_llm_light 唯一的消費者，移掉之後那個函式就是死碼
     assert not hasattr(llm_mod, "call_llm_light"), "call_llm_light 已無人使用，應移除"
+
+
+# ── 上櫃股票的新聞 ────────────────────────────────────────────────────
+# 報價、K 線、關鍵指標、財報、提醒五處都會先試 .TW 再試 .TWO，
+# 只有新聞漏了，於是上櫃股票在晨報裡永遠是「本日無相關新聞」——
+# 跟真的沒新聞長得一模一樣。
+
+import time
+
+from bot.services.news import _fetch_news
+
+
+class _FakeTicker:
+    """只有指定的 symbol 有新聞，其他一律空的。"""
+
+    def __init__(self, symbol, has_news_for, items, long_name=""):
+        self.symbol = symbol
+        self.news = items if symbol == has_news_for else []
+        # 台股名稱是中文，比對標題要靠這個英文名（見 _fetch_news）
+        self.info = {"longName": long_name}
+
+
+def _fresh_item(title):
+    return {"title": title, "link": "https://example.com/x",
+            "providerPublishTime": time.time() - 3600}
+
+
+def test_otc_stock_falls_back_to_two_suffix(monkeypatch):
+    seen = []
+
+    def fake(symbol):
+        seen.append(symbol)
+        return _FakeTicker(symbol, "6488.TWO",
+                           [_fresh_item("GlobalWafers posts record revenue")],
+                           "GlobalWafers Co Ltd")
+
+    monkeypatch.setattr("bot.services.news.yf.Ticker", fake)
+    items = _fetch_news("6488", "環球晶")
+
+    assert seen == ["6488.TW", "6488.TWO"], f"沒有依序試兩個後綴：{seen}"
+    assert len(items) == 1 and "GlobalWafers" in items[0]["title"]
+
+
+def test_listed_stock_stops_at_tw(monkeypatch):
+    """上市股票在第一個後綴就拿到，不該多打一次網路。"""
+    seen = []
+
+    def fake(symbol):
+        seen.append(symbol)
+        return _FakeTicker(symbol, "2330.TW",
+                           [_fresh_item("TSMC raises capex guidance")],
+                           "Taiwan Semiconductor Manufacturing Company Limited")
+
+    monkeypatch.setattr("bot.services.news.yf.Ticker", fake)
+    items = _fetch_news("2330", "台積電")
+
+    assert seen == ["2330.TW"], f"上市股票不該試 .TWO：{seen}"
+    assert len(items) == 1
+
+
+def test_us_stock_uses_bare_symbol(monkeypatch):
+    seen = []
+
+    def fake(symbol):
+        seen.append(symbol)
+        return _FakeTicker(symbol, "NVDA", [_fresh_item("NVDA beats estimates")])
+
+    monkeypatch.setattr("bot.services.news.yf.Ticker", fake)
+    _fetch_news("NVDA", "NVIDIA")
+    assert seen == ["NVDA"]

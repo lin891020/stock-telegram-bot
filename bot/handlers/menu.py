@@ -9,7 +9,7 @@ from bot.services.recent import get_recent
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = []
 
-    recent = get_recent()
+    recent = get_recent(update.effective_user.id)
     if recent:
         keyboard.append([
             InlineKeyboardButton(

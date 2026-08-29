@@ -50,14 +50,16 @@ def _card_text(ticker: str, data: dict) -> str:
     return quote_line(ticker, data, multiline=True)
 
 
-async def send_stock_card(message, ticker: str) -> None:
+async def send_stock_card(message, ticker: str, user_id: int) -> None:
+    """user_id 刻意不給預設值——漏傳會靜靜寫進一個不存在的使用者，
+    而症狀是「主選單的快捷按鈕怎麼都不更新」，很難聯想到這裡。"""
     ticker = ticker.upper().strip()
     data = await get_stock_summary(ticker)
     if not isinstance(data, dict) or data.get("error"):
         await message.reply_text(f"查無「{ticker}」的報價，請確認代號是否正確")
         return
     name = data.get("name", "")
-    add_recent(ticker, name)
+    add_recent(user_id, ticker, name)
     await message.reply_text(
         _card_text(ticker, data),
         reply_markup=_card_keyboard(ticker, name),
@@ -74,7 +76,7 @@ async def text_lookup_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if looks_like_ticker(query):
-        await send_stock_card(update.message, query)
+        await send_stock_card(update.message, query, update.effective_user.id)
         return
 
     if has_chinese(query):
@@ -89,7 +91,7 @@ async def text_lookup_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if len(results) == 1:
-        await send_stock_card(update.message, results[0]["symbol"])
+        await send_stock_card(update.message, results[0]["symbol"], update.effective_user.id)
         return
 
     def _display(r: dict) -> str:
@@ -112,7 +114,7 @@ async def card_open_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
     ticker = query.data[len("card_"):]
-    await send_stock_card(query.message, ticker)
+    await send_stock_card(query.message, ticker, query.from_user.id)
 
 
 @restrict_callback
