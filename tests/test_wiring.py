@@ -21,10 +21,7 @@ aiolimiter = pytest.importorskip(
 def app(monkeypatch):
     monkeypatch.setattr(main, "TELEGRAM_BOT_TOKEN", "123:FAKE")
     built = {}
-    real_run = None
 
-    class _Recorder:
-        pass
 
     # run_polling 會阻塞，換掉它才能跑到組裝結束
     import telegram.ext
