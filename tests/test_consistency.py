@@ -5,7 +5,7 @@
 """
 from bot.services.consistency import (
     check_balance_identity, check_capex_sign, check_cashflow_scale,
-    check_cross_source, check_financials, check_income_ordering,
+    check_cross_source, check_financials, check_income_ordering, check_tax_identity,
 )
 
 # 台積電 2024 的真實數字
@@ -38,10 +38,48 @@ def test_catches_the_cumulative_cashflow_bug():
 
 
 def test_catches_broken_income_ordering():
-    """營收 ≥ 毛利 ≥ 營業利益 ≥ 淨利，會計上必然成立。"""
+    """營收 ≥ 毛利 ≥ 營業利益，這兩段才是恆等式。"""
     bad = {**_GOOD, "gross_profit": {"2024": 3_000_000_000_000}}   # 毛利 > 營收
     notes = check_income_ordering(bad)
     assert notes and "會計上不可能" in notes[0]
+
+
+# 聯發科 2025 的真實數字：淨利大於營業利益，但完全正確
+_MTK_2025 = {
+    "revenue": {"2025": 595_966_000_000},
+    "gross_profit": {"2025": 300_000_000_000},
+    "operating_income": {"2025": 103_469_695_000},
+    "pretax_income": {"2025": 124_900_000_000},
+    "tax": {"2025": 18_800_000_000},
+    "net_income": {"2025": 106_117_575_000},
+}
+
+
+def test_net_income_above_operating_income_is_not_an_error():
+    """「營業利益 ≥ 淨利」不是恆等式——業外收入大於所得稅時就會反轉。
+
+    聯發科 2025：營業利益 1,035 億、業外 +214 億、稅 −188 億、淨利 1,061 億。
+    這條規則曾經對九支自選股裡的兩支誤報，而會亂叫的檢查只會被忽略。
+    """
+    assert check_income_ordering(_MTK_2025) == []
+    assert check_financials({"annual": _MTK_2025}) == []
+
+
+def test_tax_identity_holds_for_real_data():
+    """稅後淨利 = 稅前淨利 − 所得稅，這才是真正的恆等式。"""
+    assert check_tax_identity(_MTK_2025) == []
+
+
+def test_tax_identity_catches_mismatched_periods():
+    bad = {**_MTK_2025, "net_income": {"2025": 150_000_000_000}}
+    notes = check_tax_identity(bad)
+    assert notes and "不等於稅前淨利減所得稅" in notes[0]
+
+
+def test_net_income_above_revenue_is_flagged():
+    bad = {**_GOOD, "net_income": {"2024": 5_000_000_000_000}}
+    notes = check_income_ordering(bad)
+    assert any("大於營收" in n for n in notes)
 
 
 def test_catches_unbalanced_balance_sheet():

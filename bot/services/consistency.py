@@ -37,16 +37,22 @@ def _ratio(a: float, b: float) -> float:
 
 
 def check_income_ordering(annual: dict) -> list[str]:
-    """損益表的大小關係：營收 ≥ 毛利 ≥ 營業利益 ≥ 稅後淨利。
+    """損益表的大小關係：營收 ≥ 毛利 ≥ 營業利益。
 
-    會計上必然成立（同一年度、同一口徑）。不成立就代表某一項的
-    期間或加總方式錯了。
+    這兩段才是真正的恆等式：
+      毛利 = 營收 − 銷貨成本（成本 ≥ 0）
+      營業利益 = 毛利 − 營業費用（費用 ≥ 0）
+
+    ⚠️ 「營業利益 ≥ 稅後淨利」**不是**恆等式，不要加進來。業外收入
+    （利息、投資收益、匯兌）大於所得稅時，淨利就會大於營業利益。
+    實測聯發科 2025：營業利益 1,035 億、業外 +214 億、稅 −188 億、
+    淨利 1,061 億——完全正確的數字。這條規則曾經對九支自選股裡的
+    兩支誤報，而會亂叫的檢查只會訓練人忽略它。
     """
     chain = [
         ("營收", "revenue"),
         ("毛利", "gross_profit"),
         ("營業利益", "operating_income"),
-        ("稅後淨利", "net_income"),
     ]
     values = []
     for label, key in chain:
@@ -63,7 +69,41 @@ def check_income_ordering(annual: dict) -> list[str]:
                 f"{yb} 年的{lb}（{vb:,.0f}）大於{la}（{va:,.0f}），"
                 f"會計上不可能——這兩項至少有一個的期間或加總方式是錯的，不要引用"
             )
+
+    # 淨利大於營收才是真正異常（業外再多也很難超過整年營收）
+    rev = _latest_full_year(annual.get("revenue", {}))
+    net = _latest_full_year(annual.get("net_income", {}))
+    if rev and net and rev[0] == net[0] and rev[1] > 0 and net[1] > rev[1]:
+        notes.append(
+            f"{net[0]} 年的稅後淨利（{net[1]:,.0f}）大於營收（{rev[1]:,.0f}），"
+            f"極不尋常——兩項的期間或加總方式可能不一致，不要引用"
+        )
     return notes
+
+
+def check_tax_identity(annual: dict) -> list[str]:
+    """稅後淨利 = 稅前淨利 − 所得稅。這是真正的恆等式。
+
+    比「營業利益 ≥ 淨利」有用得多：它能抓出三個科目之間期間或加總
+    方式不一致的情況，而不會被業外收入誤導。
+    """
+    got = [
+        _latest_full_year(annual.get(k, {}))
+        for k in ("pretax_income", "tax", "net_income")
+    ]
+    if any(g is None for g in got):
+        return []
+    (yp, pretax), (yt, tax), (yn, net) = got
+    if not (yp == yt == yn) or pretax == 0:
+        return []
+    expected = pretax - tax
+    if abs(expected - net) / abs(pretax) > 0.02:
+        return [
+            f"{yn} 年的稅後淨利（{net:,.0f}）不等於稅前淨利減所得稅"
+            f"（{pretax:,.0f} − {tax:,.0f} = {expected:,.0f}）——"
+            f"三個科目的期間或加總方式不一致，不要引用"
+        ]
+    return []
 
 
 def check_cashflow_scale(annual: dict) -> list[str]:
@@ -143,7 +183,7 @@ def check_financials(financials: dict, metrics: dict | None = None) -> list[str]
     if not annual:
         return []
     notes = []
-    for check in (check_income_ordering, check_cashflow_scale,
+    for check in (check_income_ordering, check_tax_identity, check_cashflow_scale,
                   check_balance_identity, check_capex_sign):
         try:
             notes += check(annual)
