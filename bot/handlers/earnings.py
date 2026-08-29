@@ -27,6 +27,26 @@ def _report_button(ticker: str) -> InlineKeyboardMarkup:
     ]])
 
 
+# 速覽裡最多列這麼多項缺漏，其餘收合。全部列出來會蓋過本季數字本身。
+_MAX_MISSING_SHOWN = 4
+
+
+def _missing_block(missing: list[str]) -> str:
+    """把缺漏「列出來」而不是只報數量。
+
+    整套設計的原則是「寧可說查不到，不可用舊資料假裝現況」，但速覽
+    以前只寫「⚠️ 本次缺漏 3 項」——說了數量卻沒說是什麼，讀的人
+    無從判斷缺的那幾項會不會動搖結論。
+    """
+    if not missing:
+        return ""
+    shown = missing[:_MAX_MISSING_SHOWN]
+    lines = "\n".join(f"　• {m}" for m in shown)
+    rest = len(missing) - len(shown)
+    tail = f"\n　• 還有 {rest} 項（完整報告內有清單）" if rest > 0 else ""
+    return f"\n\n⚠️ 本次查不到（{len(missing)} 項）：\n{lines}{tail}"
+
+
 def _format_quarter_history(quarters: list[dict], ticker: str = "") -> str:
     """近幾季 EPS 的 beat/miss，純程式計算、不經模型。
 
@@ -79,8 +99,9 @@ async def _run_earnings_analysis(ticker: str) -> tuple[str, str]:
         if next_date:
             parts += ["", f"下次財報日：{next_date}"]
 
-    if evidence.missing:
-        parts.append(f"\n⚠️ 本次缺漏 {len(evidence.missing)} 項（完整報告內有清單）")
+    missing = _missing_block(evidence.missing)
+    if missing:
+        parts.append(missing)
 
     return "\n".join(parts), label
 
@@ -182,10 +203,7 @@ async def poll_earnings_announcements(context: ContextTypes.DEFAULT_TYPE) -> Non
                     continue
 
                 brief, evidence, label = await build_brief(ticker)
-                missing_note = (
-                    f"\n\n⚠️ 本次缺漏 {len(evidence.missing)} 項（完整報告內有清單）"
-                    if evidence.missing else ""
-                )
+                missing_note = _missing_block(evidence.missing)
                 await send_long(
                     context.bot,
                     ALLOWED_TELEGRAM_ID,

@@ -134,12 +134,16 @@ for _key in PROMPTS:
         fixed_sections=_FIXED_SECTIONS,
     ) + _POSITIONING + _DATA_DISCIPLINE
 
-ANALYSIS_BUTTONS = [
-    ("完整分析", "full"),
-    ("財務健康", "financial"),
-    ("競爭護城河", "moat"),
-    ("估值分析", "valuation"),
-    ("成長潛力", "growth"),
-    ("多空辯論", "debate"),
-    ("判斷條件", "recommendation"),
+# (按鈕文字, key, 一句白話)。白話那句只出現在選單訊息裡，不進按鈕
+# ——Telegram 按鈕塞不下，而且七個術語並排時新手一個都看不懂。
+ANALYSIS_TYPES = [
+    ("完整分析",   "full",           "全部面向掃一遍，最長"),
+    ("財務健康",   "financial",      "會不會倒？賺的錢是真的嗎"),
+    ("競爭護城河", "moat",           "別人為什麼搶不走它的生意"),
+    ("估值分析",   "valuation",      "現在這個價格算貴還是便宜"),
+    ("成長潛力",   "growth",         "未來還能長多大、靠什麼長"),
+    ("多空辯論",   "debate",         "看多與看空的理由各是什麼"),
+    ("判斷條件",   "recommendation", "什麼條件成立才該買／該賣，怎麼驗證"),
 ]
+
+ANALYSIS_BUTTONS = [(label, key) for label, key, _ in ANALYSIS_TYPES]

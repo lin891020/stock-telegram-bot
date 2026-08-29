@@ -2,6 +2,10 @@
 
 台股報價來源是 TWSE 盤後結算資料（STOCK_DAY），本質是「收盤價」，
 所以一律標「收」，避免盤中被誤認為即時價。美股走 yfinance。
+
+台股還會標出資料日期。只寫「收」不夠——盤中查詢拿到的是**昨天**的
+收盤價，畫面上卻沒有任何東西透露這件事。同一個介面下美股接近即時、
+台股落後一天，長得卻一模一樣，是這個 bot 唯一會讓人做錯決定的地方。
 """
 
 
@@ -14,6 +18,16 @@ def _extract(data: dict):
 
 def _unit(data: dict) -> str:
     return "元" if data.get("market") == "TW" else "USD"
+
+
+def _as_of(data: dict) -> str:
+    """台股資料日期，例如「（8/28 收盤）」。拿不到日期就不寫，不猜。"""
+    if data.get("market") != "TW":
+        return ""
+    stamp = (data.get("date") or "")[:10].replace("-", "/")
+    if len(stamp) != 10:
+        return ""
+    return f"（{int(stamp[5:7])}/{int(stamp[8:10])} 收盤）"
 
 
 def name_label(ticker: str, name: str) -> str:
@@ -56,4 +70,7 @@ def quote_line(ticker: str, data: dict, multiline: bool = False) -> str:
     chg = change_str(price, prev)
     if chg:
         body += f"  {chg}"
+    as_of = _as_of(data)
+    if as_of:
+        body += f"  {as_of}"
     return f"{lbl}{sep}{body}"

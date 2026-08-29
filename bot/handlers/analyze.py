@@ -14,7 +14,7 @@ from bot.services.metrics import fetch_key_metrics
 from bot.services.llm import call_llm
 from bot.services.formatting import name_label, safe_filename
 from bot.services.pdf import generate_pdf
-from bot.prompts.analysis import PROMPTS, ANALYSIS_BUTTONS
+from bot.prompts.analysis import PROMPTS, ANALYSIS_BUTTONS, ANALYSIS_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,18 @@ def _extract_brief(content: str) -> str:
     return brief.replace("**", "").strip()
 
 
+def _menu_text(ticker: str) -> str:
+    """選單訊息：每個類型配一句白話。
+
+    七個術語並排（護城河、估值、多空辯論…）對目標使用者是清楚的，
+    對第一次用的人是七個看不懂的按鈕。白話放訊息裡、按鈕維持精簡。
+    """
+    lines = [f"選擇 {ticker} 的分析類型：", ""]
+    lines += [f"• {label} — {hint}" for label, _, hint in ANALYSIS_TYPES]
+    lines += ["", "ℹ️ 這是分析框架示範，教你怎麼看一家公司，不會直接告訴你買或賣。"]
+    return "\n".join(lines)
+
+
 def _analysis_keyboard(ticker: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data=f"analyze_{ticker}_{key}")]
@@ -54,8 +66,7 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if looks_like_ticker(query):
         context.user_data["analyze_ticker"] = ticker
         await update.message.reply_text(
-            f"選擇 {ticker} 的分析類型：",
-            reply_markup=_analysis_keyboard(ticker),
+            _menu_text(ticker), reply_markup=_analysis_keyboard(ticker)
         )
         return
 
@@ -97,8 +108,7 @@ async def analyze_pick_callback(update: Update, context: ContextTypes.DEFAULT_TY
     ticker = query.data.replace("apick_", "", 1)
     context.user_data["analyze_ticker"] = ticker
     await query.edit_message_text(
-        f"選擇 {ticker} 的分析類型：",
-        reply_markup=_analysis_keyboard(ticker),
+        _menu_text(ticker), reply_markup=_analysis_keyboard(ticker)
     )
 
 
@@ -120,7 +130,7 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     label = next((l for l, k in ANALYSIS_BUTTONS if k == analysis_key), analysis_key)
-    await query.edit_message_text(f"⏳ 正在抓取 {ticker} 股價與財務數據...")
+    await query.edit_message_text(f"⏳ 正在抓取 {ticker} 股價與財務數據...（1/2）")
 
     try:
         stock_data, financials, (metrics, anomalies) = await asyncio.gather(
@@ -133,7 +143,11 @@ async def analyze_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.edit_message_text(f"❌ {stock_data['error']}")
             return
 
-        await query.edit_message_text(f"⏳ AI 正在生成 {ticker} — {label} 報告，請稍候...")
+        # 這一步要 60-90 秒。不寫預估時間的話，使用者會以為當掉而重按
+        await query.edit_message_text(
+            f"⏳ AI 正在生成 {ticker} — {label} 報告\n"
+            f"約 60-90 秒，完成後會直接給你 PDF"
+        )
 
         # 證據包負責「有什麼」與「缺什麼」，兩者都由程式決定而非模型自陳
         evidence = build_evidence(ticker, analysis_key, stock_data, financials, metrics, anomalies)

@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes, MessageHandler, CallbackQueryHandler, fil
 
 from bot.auth import restrict_callback
 from bot.handlers.alert import ask_alert_condition
-from bot.handlers.analyze import _analysis_keyboard
+from bot.handlers.analyze import _analysis_keyboard, _menu_text
 from bot.handlers.earnings import _report_button, _run_earnings_analysis
 from bot.handlers.messaging import send_long
 from bot.handlers.pending import dispatch_pending
@@ -122,7 +122,7 @@ async def card_analyze_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     ticker = query.data[len("cana_"):]
     await query.message.reply_text(
-        f"選擇 {ticker} 的分析類型：", reply_markup=_analysis_keyboard(ticker)
+        _menu_text(ticker), reply_markup=_analysis_keyboard(ticker)
     )
 
 
