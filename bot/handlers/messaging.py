@@ -55,3 +55,18 @@ async def send_long(bot, chat_id: int, text: str, parse_mode: str = None,
 async def reply_long(message, text: str, parse_mode: str = None) -> None:
     for chunk in _paginate(split_message(text)):
         await message.reply_text(chunk, parse_mode=parse_mode)
+
+
+def failure_text(exc: Exception, action: str = "分析失敗") -> str:
+    """統一的失敗訊息。
+
+    模型端的問題要跟資料問題分開講：資料抓不到「請稍後再試」是對的，
+    額度用盡再試一百次也一樣。實測額度用盡那次，畫面只寫「分析失敗，
+    請稍後再試」，完全看不出該去儲值。
+    """
+    from bot.services.llm import LLMUnavailable
+
+    if isinstance(exc, LLMUnavailable):
+        detail = exc.hint or exc.reason
+        return f"❌ AI 模型暫時無法使用：{detail}\n用 /health 可以確認各項服務狀態"
+    return f"❌ {action}，請稍後再試"

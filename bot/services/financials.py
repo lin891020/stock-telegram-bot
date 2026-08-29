@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import asyncio
@@ -7,6 +8,8 @@ from datetime import date, timedelta
 
 FINMIND_API = "https://api.finmindtrade.com/api/v4/data"
 _TOKEN = os.getenv("FINMIND_TOKEN", "")
+
+logger = logging.getLogger(__name__)
 
 
 def _token_params() -> dict:
@@ -27,6 +30,22 @@ async def _finmind_get(client: httpx.AsyncClient, dataset: str, stock_id: str, s
         return data.get("data", [])
     except Exception:
         return []
+
+
+# 我們依賴的 FinMind 科目名稱，依資料集分組。
+# 寫錯名字時 FinMind 不會報錯，只會回空陣列，於是報告默默少一整塊——
+# 這個坑踩過三次。/health 會拿這張表去對 FinMind 真正回傳的科目，
+# 一旦對方改名就亮紅燈，而不是等到某天翻資料才發現。
+FINMIND_TYPES: dict[str, tuple[str, ...]] = {
+    "TaiwanStockFinancialStatements": (
+        "Revenue", "IncomeAfterTaxes", "GrossProfit", "OperatingIncome",
+        "CostOfGoodsSold", "OperatingExpenses", "PreTaxIncome", "TAX", "EPS",
+    ),
+    "TaiwanStockBalanceSheet": ("TotalAssets", "Liabilities", "Equity"),
+    "TaiwanStockCashFlowsStatement": (
+        "CashFlowsFromOperatingActivities", "PropertyAndPlantAndEquipment",
+    ),
+}
 
 
 def _to_float(value):
@@ -142,8 +161,12 @@ async def fetch_taiwan_financials(ticker: str) -> dict:
     operating_income_annual = extract_flow(income_annual, "OperatingIncome")
 
     total_assets = extract_point(balance_annual, "TotalAssets")
-    total_liabilities = extract_point(balance_annual, "TotalLiabilities")
-    equity = extract_point(balance_annual, "StockholdersEquity")
+    # FinMind 的科目叫 Liabilities / Equity，不是 TotalLiabilities /
+    # StockholdersEquity（那是 yfinance 的講法）。這兩個名字錯了很久，
+    # 症狀是台股的總負債與股東權益一直是空的——負債比、ROE 全部算不出來，
+    # 而資產負債表平衡檢查也因為永遠拿不到資料而形同不存在。
+    total_liabilities = extract_point(balance_annual, "Liabilities")
+    equity = extract_point(balance_annual, "Equity")
 
     # 費用與稅務科目：少了它們，模型看到「淨利突然掉一個數量級」只能寫「無法判斷」。
     # 實測 META 2025Q3 淨利 27 億的原因就是當季所得稅 190 億，答案只差一行。
@@ -195,7 +218,27 @@ async def fetch_taiwan_financials(ticker: str) -> dict:
         },
     }
 
+    _warn_empty(ticker, result["annual"])
     return result
+
+
+# 這些年度科目正常情況下一定有值。空的代表 FinMind 的型別名稱失效，
+# 而寫錯名字只會靜默回空陣列——同一個坑踩過三次（NetIncome、capex、
+# 負債與權益），每次都是報告默默少一整塊，隔很久才被發現。
+_EXPECTED_ANNUAL = (
+    "revenue", "net_income", "gross_profit", "operating_income",
+    "pretax_income", "tax", "total_assets", "total_liabilities",
+    "equity", "operating_cashflow", "capex",
+)
+
+
+def _warn_empty(ticker: str, annual: dict) -> None:
+    blank = [k for k in _EXPECTED_ANNUAL if not annual.get(k)]
+    if blank:
+        logger.warning(
+            "FinMind %s 這些年度科目是空的，可能是型別名稱失效：%s",
+            ticker, "、".join(blank),
+        )
 
 
 def fetch_us_financials(ticker: str) -> dict:

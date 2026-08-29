@@ -37,7 +37,11 @@ def _latest_reported_quarter(earnings: dict) -> dict | None:
 
 
 async def gather_earnings_evidence(ticker: str):
-    """把本次財報要用的所有資料湊齊，回傳 (evidence, label, release)。"""
+    """把本次財報要用的所有資料湊齊。
+
+    回傳 (evidence, label, release, financials, metrics)。後兩者是給報告
+    產出後的比率重算用的——證據包是給模型看的文字，重算需要結構化數字。
+    """
     stock_data, financials, metrics_result, earnings, release = await asyncio.gather(
         get_stock_summary(ticker),
         get_financials(ticker),
@@ -114,7 +118,7 @@ async def gather_earnings_evidence(ticker: str):
 
     # 缺漏清單要在事實補齊後重算，否則 EPS 與新聞稿會被誤報為缺漏
     evidence.missing = _recompute_missing(evidence)
-    return evidence, label, release
+    return evidence, label, release, financials, metrics
 
 
 def _recompute_missing(evidence) -> list[str]:
@@ -128,7 +132,7 @@ def _recompute_missing(evidence) -> list[str]:
 
 async def build_brief(ticker: str) -> tuple[str, object, str]:
     """財報速覽（推播用）。回傳 (文字, evidence, label)。"""
-    evidence, label, _ = await gather_earnings_evidence(ticker)
+    evidence, label, *_ = await gather_earnings_evidence(ticker)
     user = f"{evidence.to_prompt()}\n\n{brief_prompt(label)}"
     # 這裡刻意不用輕量模型。晨報新聞摘要每天跑、內容也不精確敏感，
     # 用 Haiku 省成本合理；但財報速覽一年只跑約 36 次（9 支 × 4 季），
@@ -140,8 +144,8 @@ async def build_brief(ticker: str) -> tuple[str, object, str]:
 
 async def build_full_report(ticker: str) -> tuple[str, str]:
     """完整財報解讀（按鈕觸發，出 PDF）。回傳 (內容, label)。"""
-    evidence, label, _ = await gather_earnings_evidence(ticker)
+    evidence, label, _, financials, metrics = await gather_earnings_evidence(ticker)
     evidence_text = evidence.to_prompt()
     user = f"{evidence_text}\n\n{full_prompt(label)}"
     content = await asyncio.to_thread(call_llm, FULL_SYSTEM, user)
-    return content + audit_note(content, evidence_text), label
+    return content + audit_note(content, evidence_text, financials, metrics), label

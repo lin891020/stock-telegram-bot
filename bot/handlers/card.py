@@ -13,7 +13,7 @@ from bot.auth import restrict_callback
 from bot.handlers.alert import ask_alert_condition
 from bot.handlers.analyze import _analysis_keyboard, _menu_text
 from bot.handlers.earnings import _report_button, _run_earnings_analysis
-from bot.handlers.messaging import send_long
+from bot.handlers.messaging import failure_text, send_long
 from bot.handlers.pending import dispatch_pending
 from bot.services.formatting import quote_line
 from bot.services.recent import add_recent
@@ -144,7 +144,7 @@ async def card_earnings_callback(update: Update, context: ContextTypes.DEFAULT_T
         await status.edit_text(f"❌ {e}")
     except Exception as e:
         logger.error("card earnings failed for %s: %s", ticker, e, exc_info=True)
-        await status.edit_text("❌ 分析失敗，請稍後再試")
+        await status.edit_text(failure_text(e))
 
 
 @restrict_callback

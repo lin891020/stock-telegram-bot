@@ -12,8 +12,8 @@ from datetime import date, timedelta
 from bot.config import ALLOWED_TELEGRAM_ID
 from bot.services.alerts import get_alerts
 from bot.services.filings import EARNINGS_FORMS, get_cik, list_filings
-from bot.services.financials import _finmind_get
-from bot.services.llm import call_llm, get_current_model, AVAILABLE_MODELS
+from bot.services.financials import FINMIND_TYPES, _finmind_get
+from bot.services.llm import call_llm, get_current_model, AVAILABLE_MODELS, LLMUnavailable
 from bot.services.pdf import font_status
 from bot.services.watchlist import get_watchlist
 
@@ -57,17 +57,37 @@ def _check_sec() -> tuple[bool, str]:
 
 
 def _check_finmind() -> tuple[bool, str]:
+    """不只看「有沒有回東西」，還要看我們依賴的科目名稱在不在。
+
+    只數筆數的話，FinMind 改一個科目名我們是查不出來的——它照樣回幾百筆，
+    只有那一項默默變空。負債與權益就是這樣缺了很久沒人發現。
+    """
     try:
-        rows = asyncio.run(_finmind_probe())
-        return (True, f"2330 取得 {len(rows)} 筆") if rows else (False, "回傳空值（可能額度用盡）")
+        total, missing = asyncio.run(_finmind_probe())
     except Exception as e:
         return False, type(e).__name__
+    if not total:
+        return False, "回傳空值（可能額度用盡）"
+    if missing:
+        return False, f"缺少科目 {'、'.join(missing)}（FinMind 可能改名，該欄位會變空）"
+    n = sum(len(v) for v in FINMIND_TYPES.values())
+    return True, f"2330 取得 {total} 筆，{n} 個依賴科目齊全"
 
 
-async def _finmind_probe() -> list:
+async def _finmind_probe() -> tuple[int, list[str]]:
+    """回傳 (總筆數, 查無的科目名稱)。"""
     start = (date.today() - timedelta(days=400)).strftime("%Y-%m-%d")
     async with httpx.AsyncClient() as client:
-        return await _finmind_get(client, "TaiwanStockFinancialStatements", "2330", start)
+        datasets = list(FINMIND_TYPES)
+        results = await asyncio.gather(
+            *[_finmind_get(client, d, "2330", start) for d in datasets]
+        )
+    total, missing = 0, []
+    for dataset, rows in zip(datasets, results):
+        total += len(rows)
+        seen = {r.get("type") for r in rows}
+        missing += [t for t in FINMIND_TYPES[dataset] if t not in seen]
+    return total, missing
 
 
 def _check_lxml() -> tuple[bool, str]:
@@ -84,6 +104,9 @@ def _check_llm() -> tuple[bool, str]:
         call_llm("你只回覆 ok", "ping")
         info = AVAILABLE_MODELS.get(get_current_model())
         return True, info.label if info else get_current_model()
+    except LLMUnavailable as e:
+        # 巡檢是半夜自己跑的，寫「RuntimeError」等於什麼都沒說
+        return False, e.hint or e.reason
     except Exception as e:
         return False, type(e).__name__
 

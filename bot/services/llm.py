@@ -61,17 +61,56 @@ def set_current_model(model_key: str) -> None:
     save_model(model_key)
 
 
+class LLMUnavailable(RuntimeError):
+    """模型端的問題（額度用盡、金鑰失效、供應商當機），不是資料問題。
+
+    分開一種例外，是因為使用者該做的事完全不同：資料抓不到「稍後再試」
+    是對的，額度用盡再試一百次也一樣。實測信用額度用盡那次，畫面只寫
+    「分析失敗，請稍後再試」，看不出要去儲值。
+    """
+
+    def __init__(self, reason: str, hint: str = ""):
+        super().__init__(reason)
+        self.reason, self.hint = reason, hint
+
+
+# 供應商錯誤訊息 → 給使用者的白話。比對的是小寫後的訊息內容。
+_LLM_HINTS = (
+    ("credit balance", "API 額度用盡，需要儲值"),
+    ("quota", "API 額度用盡或超過用量限制"),
+    ("rate limit", "呼叫太頻繁，等幾分鐘再試"),
+    ("authentication", "API key 無效或過期"),
+    ("permission", "API key 沒有這個模型的權限"),
+    ("not_found", "模型代號不存在，用 /model 換一個"),
+    ("overloaded", "模型端忙碌中，稍後再試"),
+)
+
+
+def _describe(exc: Exception) -> str:
+    text = str(exc).lower()
+    for needle, hint in _LLM_HINTS:
+        if needle in text:
+            return hint
+    return ""
+
+
 def call_llm(system: str, user: str, model: str | None = None) -> str:
     """Synchronous LLM call. Uses current selected model if model is None."""
     target = model or _current_model
     info = AVAILABLE_MODELS.get(target)
     provider = info.provider if info else LLM_PROVIDER
 
-    if provider == "anthropic":
-        return _call_anthropic(system, user, target)
-    if provider == "gemini":
-        return _call_gemini(system, user, target)
-    return _call_github(system, user)
+    try:
+        if provider == "anthropic":
+            return _call_anthropic(system, user, target)
+        if provider == "gemini":
+            return _call_gemini(system, user, target)
+        return _call_github(system, user)
+    except LLMUnavailable:
+        raise
+    except Exception as exc:
+        logger.error("LLM 呼叫失敗（provider=%s, model=%s）：%s", provider, target, exc)
+        raise LLMUnavailable(type(exc).__name__, _describe(exc)) from exc
 
 
 def _get_anthropic_client():

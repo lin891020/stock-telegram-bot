@@ -62,3 +62,47 @@ def test_client_is_reused_across_calls():
         call_llm("system", "user", model="claude-sonnet-4-6")
         call_llm("system", "user", model="claude-sonnet-4-6")
     assert mock_cls.call_count == 1
+
+
+# ── 模型端故障要跟資料故障分開 ────────────────────────────────────────
+# 實測 Anthropic 信用額度用盡時，畫面只寫「分析失敗，請稍後再試」，
+# 而那時再試一百次也一樣。
+
+def test_provider_error_becomes_llm_unavailable(monkeypatch):
+    import bot.services.llm as mod
+
+    def boom(*a, **k):
+        raise RuntimeError("Your credit balance is too low to access the Anthropic API")
+    monkeypatch.setattr(mod, "_call_anthropic", boom)
+    monkeypatch.setattr(mod, "_current_model", "claude-sonnet-5")
+
+    with pytest.raises(mod.LLMUnavailable) as exc:
+        mod.call_llm("sys", "user")
+    assert exc.value.hint == "API 額度用盡，需要儲值"
+
+
+def test_unknown_provider_error_still_wrapped(monkeypatch):
+    import bot.services.llm as mod
+
+    def boom(*a, **k):
+        raise ValueError("something nobody has seen before")
+    monkeypatch.setattr(mod, "_call_anthropic", boom)
+    monkeypatch.setattr(mod, "_current_model", "claude-sonnet-5")
+
+    with pytest.raises(mod.LLMUnavailable) as exc:
+        mod.call_llm("sys", "user")
+    assert exc.value.reason == "ValueError" and exc.value.hint == ""
+
+
+def test_failure_text_tells_you_it_is_the_model():
+    from bot.handlers.messaging import failure_text
+    from bot.services.llm import LLMUnavailable
+
+    text = failure_text(LLMUnavailable("BadRequestError", "API 額度用盡，需要儲值"))
+    assert "AI 模型" in text and "儲值" in text
+    assert "稍後再試" not in text, "額度用盡時叫人稍後再試是誤導"
+
+
+def test_failure_text_keeps_the_old_wording_for_data_errors():
+    from bot.handlers.messaging import failure_text
+    assert failure_text(TimeoutError("yfinance 逾時")) == "❌ 分析失敗，請稍後再試"

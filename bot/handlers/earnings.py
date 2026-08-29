@@ -7,7 +7,7 @@ from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 from bot.auth import restrict_callback
 from bot.config import ALLOWED_TELEGRAM_ID
-from bot.handlers.messaging import send_long
+from bot.handlers.messaging import failure_text, send_long
 from bot.handlers.pending import ask, register
 from bot.services.earnings import fetch_earnings_data
 from bot.services.earnings_watch import (
@@ -152,7 +152,7 @@ async def earnings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text(f"❌ {e}")
     except Exception as e:
         logger.error("earnings failed for %s: %s", ticker, e, exc_info=True)
-        await update.message.reply_text("❌ 分析失敗，請稍後再試")
+        await update.message.reply_text(failure_text(e))
 
 
 @restrict_callback
@@ -174,7 +174,7 @@ async def earnings_pick_callback(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(f"❌ {e}")
     except Exception as e:
         logger.error("earnings failed for %s: %s", ticker, e, exc_info=True)
-        await query.edit_message_text("❌ 分析失敗，請稍後再試")
+        await query.edit_message_text(failure_text(e))
 
 
 @register("earnings")
@@ -242,7 +242,7 @@ async def earnings_report_callback(update: Update, context: ContextTypes.DEFAULT
         await status.delete()
     except Exception as e:
         logger.error("earnings report failed for %s: %s", ticker, e, exc_info=True)
-        await status.edit_text("❌ 報告生成失敗，請稍後再試")
+        await status.edit_text(failure_text(e, "報告生成失敗"))
 
 
 def build_earnings_handler(auth_filter):
