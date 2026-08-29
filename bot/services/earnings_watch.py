@@ -1,7 +1,35 @@
-"""財報公布偵測：盯所有自選股，出現新一季實際 EPS 就推播。
+"""財報公布偵測：盯所有自選股，財報一出就推播。
 
-不需要事前登記。狀態檔只記每支「已知最新一季財報日」當基準，
-第一次看到某支股票時只寫基準、不推播，避免上線當下把舊財報全推一遍。
+不需要事前登記。第一次看到某支股票時只寫基準、不推播，避免上線當下
+把舊財報全推一遍——這是這個模組最重要的不變式。
+
+## 兩條訊號、三個狀態欄位
+
+    SEC 申報   EDGAR 的 8-K/6-K 財報新聞稿。第一手、公司送件當下就有，
+               而且觸發的同時就把報告要用的原文一起拿到了。台股沒有。
+    EPS 更新   yfinance 的實際 EPS。給得出 beat/miss（EDGAR 只有公司
+               自己的數字，沒有分析師預期），台股也吃得到。
+
+狀態檔每支股票三個欄位，各有各的理由：
+
+    last_seen_filing   「這份申報我檢查過了」的閘門。大部分 8-K 不是財報
+                       （人事、協議、交車數量），沒有閘門的話每輪都要重掃
+                       10-20 個 SEC 請求。實測 MU：閘門停在 2026-08-26
+                       （一份非財報的 8-K），財報基準是 2026-06-24。
+    last_filing        SEC 訊號推播到哪一季了
+    last_reported      EPS 訊號推播到哪一季了
+
+## 為什麼後兩個不合併
+
+實測正式機的資料，這兩個欄位在任何時候都相等（commit_event 會一起推進），
+看起來合併成單一 last_pushed 就好，行為也等價。**但首次見到時不等價**：
+
+    兩個欄位：SEC 與 EPS 各自獨立建基準，兩條都保證不推播
+    一個欄位：SEC 先建了基準 D1，若 yfinance 的日期 D2 > D1，
+              EPS 路徑會判定「有新財報」→ 上線第一輪就推一則舊財報
+
+D1 == D2 在實測資料上永遠成立，所以合併大概不會出事——但它把
+「不可能」降級成「不太可能」，換到的只是少一個欄位。不划算。
 """
 import asyncio
 import logging
@@ -13,6 +41,7 @@ from bot.services.store import load_json, save_json
 
 from bot.services.earnings import fetch_earnings_data
 from bot.services.filings import EARNINGS_FORMS, fetch_earnings_release, get_cik, list_filings
+from bot.services.formatting import name_label
 from bot.services.stock import is_taiwan_stock
 from bot.services.watchlist import all_tickers
 
@@ -191,8 +220,7 @@ async def build_earnings_reminders() -> str:
         if not next_date:
             continue
 
-        name = data.get("name", "")
-        label = f"{name}({ticker})" if name and name != ticker else ticker
+        label = name_label(ticker, data.get("name", ""))
         if next_date == str(today):
             lines.append(f"• {label} 今天公布財報（公布後會自動推送分析）")
         elif next_date == str(tomorrow):

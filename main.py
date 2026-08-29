@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from datetime import time as dt_time, timezone
 from telegram import BotCommand
 from telegram.ext import (
     AIORateLimiter, Application, CallbackQueryHandler, CommandHandler,
@@ -18,11 +17,9 @@ from bot.handlers.analyze import build_analyze_handler
 from bot.handlers.learn import build_learn_handler
 from bot.handlers.finance import build_finance_handler
 from bot.handlers.model import build_model_handler
-from bot.handlers.watch import (
-    build_watch_handler,
-    schedule_daily_news,
-    schedule_tw_closing,
-)
+from bot.handlers.watch import build_watch_handler
+from bot.handlers.digest import build_digest_handler
+from bot.handlers.schedule import build_schedule_handler, schedule_all
 from bot.handlers.price import build_price_handler
 from bot.handlers.alert import build_alert_handler, check_alerts, check_big_moves
 from bot.handlers.card import build_card_handlers
@@ -31,6 +28,7 @@ from bot.handlers.chart import build_chart_handler
 from bot.handlers.errors import error_handler
 from bot.handlers.pending import drop_stale_pending
 from bot.handlers.health import build_health_handler, health_watchdog
+from bot.services import clock
 from bot.services.tw_stocks import load_tw_stock_list
 from bot.handlers.earnings import build_earnings_handler, poll_earnings_announcements
 
@@ -44,12 +42,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 _PERSISTENCE_FILE = Path("data/ptb_state.pickle")
 
-# VM 跑 UTC，排程時間一律照既有慣例明確換算（見 watch.py 的 _TAIPEI_UTC_OFFSET）
-_TAIPEI_UTC_OFFSET = 8
-
-
-def _taipei(hour: int, minute: int = 0) -> dt_time:
-    return dt_time(hour=(hour - _TAIPEI_UTC_OFFSET) % 24, minute=minute, tzinfo=timezone.utc)
+# VM 跑 UTC，時區換算一律走 clock（整個專案唯一一處）
+_taipei = clock.utc_time_for
 
 async def _post_init(application) -> None:
     await asyncio.to_thread(load_tw_stock_list)
@@ -132,6 +126,12 @@ def main() -> None:
     for handler in build_watch_handler(auth):
         app.add_handler(handler)
 
+    for handler in build_digest_handler(auth):
+        app.add_handler(handler)
+
+    for handler in build_schedule_handler(auth):
+        app.add_handler(handler)
+
     for handler in build_earnings_handler(auth):
         app.add_handler(handler)
 
@@ -145,8 +145,8 @@ def main() -> None:
 
     # 推送時間皆由 /settime 設定（存於 data/settings.json）
     # 預設：起床報 06:30（含隔夜美股收盤）、台股收盤 14:00（皆台北時間）
-    schedule_daily_news(app.job_queue)
-    schedule_tw_closing(app.job_queue)
+    # 要新增一個定時推播：改 schedule.py 的 _JOBS，這裡不用動
+    schedule_all(app.job_queue)
 
     # 價格提醒：每 10 分鐘檢查（盤中才打 API）
     app.job_queue.run_repeating(check_alerts, interval=600, first=60, name="alert_check")

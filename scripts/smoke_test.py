@@ -80,6 +80,7 @@ async def main():
     import bot.handlers.price as price
     import bot.handlers.card as card
     import bot.handlers.watch as watch
+    import bot.handlers.digest as digest
     import bot.handlers.health as health
     import bot.handlers.model as model
     import bot.handlers.menu as menu

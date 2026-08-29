@@ -131,7 +131,16 @@ async def exam1():
         pushes = [s for s in sink if s[0] == "推播"]
         assert not pushes, f"首次看到就推了 {len(pushes)} 則"
         base = state().get("NVDA", {}).get("last_reported")
-        assert base, "首次看到沒有建立基準"
+        if not base:
+            # 資料源暫時掛掉會長得跟邏輯壞掉一模一樣，先分清楚再說
+            from bot.services.earnings import fetch_earnings_data
+            probe = await fetch_earnings_data("NVDA")
+            raise AssertionError(
+                f"沒有建立基準；yfinance 這次回 error={probe.get('error')!r}、"
+                f"{len(probe.get('quarters', []))} 季 —— "
+                + ("資料源暫時失敗，重跑一次" if probe.get("error") or not probe.get("quarters")
+                   else "資料正常，是偵測邏輯的問題")
+            )
         return f"0 則推播，基準建立於 {base}"
     await check("考卷一", "首次見到某支股票 → 不推播、只建基準", t_first_sight)
 
@@ -608,6 +617,7 @@ async def personas():
     import bot.handlers.price as price
     import bot.handlers.card as card
     import bot.handlers.watch as watch
+    import bot.handlers.schedule as schedule
     import bot.handlers.menu as menu
     import bot.handlers.model as model
     import bot.handlers.analyze as analyze
@@ -838,7 +848,7 @@ async def personas():
 
     async def p6_settime():
         sink = []; ctx = Ctx(sink)
-        await watch.settime_command(Upd(sink), ctx)
+        await schedule.settime_command(Upd(sink), ctx)
         body = texts(sink)
         assert ":" in body, f"沒顯示目前時間設定：{body[:80]}"
         return f"{body.splitlines()[0][:60]}"

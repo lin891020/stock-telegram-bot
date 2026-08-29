@@ -7,6 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 from bot.auth import restrict_callback
+from bot.services.formatting import name_label
 from bot.handlers.pending import ask, register
 from bot.services.alerts import (
     parse_condition, describe_condition, condition_text, is_triggered,
@@ -35,7 +36,7 @@ _USAGE = (
 def _alert_label(alert: dict) -> str:
     ticker = alert["ticker"]
     name = get_tw_name(ticker) if is_taiwan_stock(ticker) else None
-    display = f"{name}({ticker})" if name else ticker
+    display = name_label(ticker, name)
     return f"{display} {describe_condition(alert)}"
 
 
@@ -235,7 +236,7 @@ async def check_big_moves(context: ContextTypes.DEFAULT_TYPE) -> None:
             move = classify_move(ticker, price, prev)
             if move is None or was_sent(user_id_str, ticker, move["direction"]):
                 continue
-            label = f"{name}({ticker})" if name and name != ticker else ticker
+            label = name_label(ticker, name)
             unit = "元" if is_taiwan_stock(ticker) else "USD"
             arrow = "▲" if move["direction"] == "up" else "▼"
             sign = "+" if move["pct"] >= 0 else ""

@@ -340,24 +340,62 @@ handler。兩個真實 bug 是它找出來的：FinMind 的總負債與股東權
 
 ---
 
+## 我要改 X，去哪裡改
+
+| 想改的東西 | 去哪裡 |
+|---|---|
+| **報價怎麼顯示**（「收 2,420.00 元（8/28 收盤）」） | `services/formatting.py` — 全部指令共用這一份 |
+| **「名稱(代號)」的寫法** | `services/formatting.py` 的 `name_label`。曾經散在七處且**內容不一致**，別再自己寫一份 |
+| **晨報／收盤速報的內容** | `handlers/digest.py` |
+| **晨報／收盤速報的時間** | `handlers/schedule.py` 的 `_JOBS`，加一筆就多一個排程 |
+| **時區、週末判斷** | `services/clock.py` — 整個專案唯一換算時區的地方 |
+| **自選股增刪查** | `handlers/watch.py` |
+| **股票卡片上的按鈕** | `handlers/card.py` 的 `_card_keyboard` |
+| **分析報告的章節與語氣** | `prompts/analysis.py`（`/analyze`）、`prompts/earnings_report.py`（財報） |
+| **餵給模型的資料有哪些** | `services/evidence.py` — 事實、缺漏、註記都在這裡組 |
+| **資料對不對的檢查規則** | `services/consistency.py` |
+| **報告產出後的稽核** | `services/claim_audit.py` |
+| **台股財報的科目名稱** | `services/financials.py` 的 `FINMIND_TYPES` |
+| **財報公布怎麼偵測** | `services/earnings_watch.py` — 動之前先讀模組說明 |
+| **新增一個指令** | 寫 handler → `build_*_handler` → `main.py` 註冊 → `_post_init` 的指令清單。漏掉任一步有測試會擋（`test_wiring.py`） |
+| **AI 模型與價格** | `services/llm.py` 的 `AVAILABLE_MODELS` |
+
 ## 專案結構
 
 ```
 stock-telegram-bot/
 ├── bot/
-│   ├── handlers/       # Telegram 指令處理器、全域錯誤處理、健康巡檢
+│   ├── handlers/       # 一個檔案一種職責，見上表
+│   │   ├── watch.py        # 自選股增刪查
+│   │   ├── digest.py       # 定時推播「推什麼」
+│   │   ├── schedule.py     # 定時推播「幾點推」
+│   │   ├── card.py         # 股票卡片（純文字查詢的入口）
+│   │   ├── messaging.py    # 長訊息分段、失敗訊息、callback 截斷
+│   │   ├── pending.py      # 指令不帶參數時的追問
+│   │   └── errors.py       # 全域錯誤處理
 │   ├── services/       # 外部 API、證據包、資料層檢查、產出稽核、狀態存取
+│   │   ├── evidence.py     # 餵給模型的事實與缺漏
+│   │   ├── consistency.py  # 資料對不對
+│   │   ├── claim_audit.py  # 報告寫出來的數字對不對
+│   │   ├── clock.py        # 台北時間（唯一換算時區處）
+│   │   ├── formatting.py   # 顯示格式（唯一組標籤處）
+│   │   └── store.py        # 狀態檔的原子寫入
 │   ├── prompts/        # 分析師 Prompt 模板
 │   └── content/        # 預寫投資教學內容
 ├── scripts/
-│   ├── download_font.py        # 下載中文字型
+│   ├── smoke_test.py           # 端對端煙霧測試（真實資料源）
 │   ├── exam.py                 # 情境考卷 + 六個角色的端對端實測
+│   ├── download_font.py        # 下載中文字型
 │   └── stock-bot.service       # systemd 服務設定
 ├── data/               # 自選股、提醒、財報基準、對話狀態（gitignored）
 ├── tests/
-├── main.py
+├── main.py             # 接線：handler 註冊、排程、全域錯誤處理
 └── .env.example
 ```
+
+**一個原則:同一件事只有一個地方。** 這份 README 之前列過四種重複
+（標籤、callback 截斷、時區、週末判斷），其中兩種的實作**內容還不一樣**
+——那不只是難找，是會產生不一致行為的 bug。
 
 ---
 

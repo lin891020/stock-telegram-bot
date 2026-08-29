@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 from bot.auth import restrict_callback
 from bot.handlers.pending import ask, register
 from bot.services.charts import render_chart, PERIODS
+from bot.services.formatting import name_label
 from bot.services.stock import looks_like_ticker, is_taiwan_stock
 from bot.services.tw_stocks import get_tw_name
 
@@ -30,8 +31,7 @@ def _period_keyboard(ticker: str, current: str) -> InlineKeyboardMarkup:
 
 
 def _caption(ticker: str, name: str, period: str) -> str:
-    label = f"{name}({ticker})" if name else ticker
-    return f"{label} {PERIODS[period][2]}走勢"
+    return f"{name_label(ticker, name)} {PERIODS[period][2]}走勢"
 
 
 async def _render(ticker: str, period: str) -> tuple:

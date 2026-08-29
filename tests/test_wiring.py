@@ -83,3 +83,55 @@ def test_watchdog_runs_before_the_morning_report(app):
 def test_persistence_and_concurrency_are_on(app):
     assert app.persistence is not None, "沒開持久化，重啟就掉對話狀態"
     assert app.concurrent_updates, "沒開並行，/analyze 會擋住所有其他指令"
+
+
+def _registered_commands(app) -> set[str]:
+    """所有掛上的指令名稱。
+
+    /finance 是 ConversationHandler，指令藏在 entry_points 裡，
+    只看頂層的 CommandHandler 會漏掉它。
+    """
+    from telegram.ext import CommandHandler, ConversationHandler
+
+    def _names(handler):
+        if isinstance(handler, CommandHandler):
+            return {str(c) for c in handler.commands}
+        if isinstance(handler, ConversationHandler):
+            return set().union(*(_names(e) for e in handler.entry_points)) or set()
+        return set()
+
+    names = set()
+    for handlers in app.handlers.values():
+        for h in handlers:
+            names |= _names(h)
+    return names
+
+
+def test_every_advertised_command_has_a_handler(app, monkeypatch):
+    """選單上列的每個指令都要真的掛上 handler。
+
+    watch.py 拆成 watch / digest / schedule 三個檔案時，只要漏掛一組
+    build_*_handler，選單上照樣看得到指令、按下去卻毫無反應——沒有東西
+    會報錯，正是這個專案最怕的那種靜默失敗。
+    """
+    import asyncio
+
+    advertised = []
+
+    class _FakeBot:
+        async def set_my_commands(self, commands):
+            advertised.extend(c.command for c in commands)
+
+    class _FakeApp:
+        bot = _FakeBot()
+
+    asyncio.run(main._post_init(_FakeApp()))
+    assert advertised, "沒抓到指令清單"
+
+    missing = sorted(set(advertised) - _registered_commands(app))
+    assert not missing, f"選單上有但沒掛 handler：{missing}"
+
+
+def test_unadvertised_commands_still_work(app):
+    """沒列在選單上的隱藏指令也要掛著（/testclosing 是手動驗收用的）。"""
+    assert {"testclosing", "unwatch", "price", "earnings"} <= _registered_commands(app)

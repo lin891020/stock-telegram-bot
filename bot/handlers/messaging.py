@@ -70,3 +70,21 @@ def failure_text(exc: Exception, action: str = "分析失敗") -> str:
         detail = exc.hint or exc.reason
         return f"❌ AI 模型暫時無法使用：{detail}\n用 /health 可以確認各項服務狀態"
     return f"❌ {action}，請稍後再試"
+
+
+# Telegram 的 callback_data 上限是 64 bytes，超過會被 API 直接拒絕。
+# 名稱是使用者資料（中文一個字 3 bytes），一定要截。
+_CALLBACK_LIMIT = 64
+
+
+def callback_with_name(prefix: str, name: str) -> str:
+    """`prefix + 名稱`，截到 64 bytes 以內。
+
+    要按 **bytes** 截、而且 `errors="ignore"` ——按字元截會在中文邊界
+    切出半個字，decode 直接炸掉。card 與 watch 兩處各寫過一份一樣的
+    邏輯，任何一邊改了另一邊不會跟著改。
+    """
+    budget = _CALLBACK_LIMIT - len(prefix.encode("utf-8"))
+    if budget <= 0:
+        return prefix[:_CALLBACK_LIMIT]
+    return prefix + (name or "").encode("utf-8")[:budget].decode("utf-8", errors="ignore")

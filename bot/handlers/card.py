@@ -13,9 +13,9 @@ from bot.auth import restrict_callback
 from bot.handlers.alert import ask_alert_condition
 from bot.handlers.analyze import _analysis_keyboard, _menu_text
 from bot.handlers.earnings import _report_button, _run_earnings_analysis
-from bot.handlers.messaging import failure_text, send_long
+from bot.handlers.messaging import callback_with_name, failure_text, send_long
 from bot.handlers.pending import dispatch_pending
-from bot.services.formatting import quote_line
+from bot.services.formatting import name_label, quote_line
 from bot.services.recent import add_recent
 from bot.services.watchlist import add_ticker
 from bot.services.stock import (
@@ -30,9 +30,7 @@ _MAX_QUERY_LEN = 20  # 超過就當聊天雜訊，不回應
 
 def _card_keyboard(ticker: str, name: str) -> InlineKeyboardMarkup:
     # 卡片專用 callback（cana_/cearn_/cadd_）：操作一律 reply 新訊息，卡片留在原地
-    cadd_prefix = f"cadd_{ticker}_"
-    budget = 64 - len(cadd_prefix.encode("utf-8"))
-    safe_name = (name or ticker).encode("utf-8")[:budget].decode("utf-8", errors="ignore")
+    cadd = callback_with_name(f"cadd_{ticker}_", name or ticker)
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📊 深度分析", callback_data=f"cana_{ticker}"),
@@ -42,7 +40,7 @@ def _card_keyboard(ticker: str, name: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton("📋 財報", callback_data=f"cearn_{ticker}"),
             InlineKeyboardButton("🔔 設提醒", callback_data=f"ahint_{ticker}"),
         ],
-        [InlineKeyboardButton("👀 加自選", callback_data=cadd_prefix + safe_name)],
+        [InlineKeyboardButton("👀 加自選", callback_data=cadd)],
     ])
 
 
@@ -158,8 +156,7 @@ async def card_watch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     name = parts[1] if len(parts) > 1 else ticker
     if add_ticker(query.from_user.id, ticker, name):
         await query.answer("已加入追蹤")
-        label = f"{name}({ticker})" if name and name != ticker else ticker
-        await query.message.reply_text(f"✅ 已加入追蹤：{label}")
+        await query.message.reply_text(f"✅ 已加入追蹤：{name_label(ticker, name)}")
     else:
         await query.answer("已在追蹤清單中", show_alert=False)
 
