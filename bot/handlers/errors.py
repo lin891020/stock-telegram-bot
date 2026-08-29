@@ -16,8 +16,11 @@ from bot.config import ALLOWED_TELEGRAM_ID
 
 logger = logging.getLogger(__name__)
 
-# Telegram 單則上限 4096，traceback 只留尾端（最深的呼叫在後面，資訊量最大）
-_MAX_TRACE = 2500
+# Telegram 單則上限 4096。留餘裕給標題與錯誤訊息，剩下的才給 traceback。
+# Telegram 算的是 UTF-16 單位而不是 Python 字元數，貼著上限送很脆弱，留餘裕。
+_TELEGRAM_LIMIT = 4096
+_MARGIN = 96
+_HEAD_BUDGET = 900
 
 
 def _describe(update: object) -> str:
@@ -44,21 +47,27 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if chat_id is None:
         return
 
-    trace = "".join(
+    where = f"（{html.escape(context_desc)}）" if context_desc else ""
+    head = (
+        f"❌ 出了未預期的錯誤{where}\n"
+        f"<code>{html.escape(type(context.error).__name__)}: "
+        f"{html.escape(str(context.error)[:200])}</code>\n\n"
+        "細節已寫入 log。可用 /health 檢查資料源是否正常。\n\n"
+    )[:_HEAD_BUDGET]
+
+    # 先跳脫再截斷。反過來的話長度會失準——traceback 裡滿是 <module>、
+    # <lambda>，跳脫後每個 < 變成 4 個字元，實測 2500 字元會膨脹到 3660，
+    # 整則因此超過上限、送不出去。那等於錯誤通知在最需要的時候消失。
+    raw = "".join(
         traceback.format_exception(type(context.error), context.error, context.error.__traceback__)
-    )[-_MAX_TRACE:]
-    where = f"（{context_desc}）" if context_desc else ""
+    )
+    budget = _TELEGRAM_LIMIT - _MARGIN - len(head) - len("<pre></pre>")
+    trace = html.escape(raw)[-budget:] if budget > 0 else ""
 
     try:
         await context.bot.send_message(
             chat_id=chat_id,
-            text=(
-                f"❌ 出了未預期的錯誤{where}\n"
-                f"<code>{html.escape(type(context.error).__name__)}: "
-                f"{html.escape(str(context.error)[:200])}</code>\n\n"
-                "細節已寫入 log。可用 /health 檢查資料源是否正常。\n\n"
-                f"<pre>{html.escape(trace)}</pre>"
-            ),
+            text=f"{head}<pre>{trace}</pre>" if trace else head,
             parse_mode="HTML",
         )
     except Exception as e:
