@@ -3,11 +3,10 @@ import html
 import logging
 import re
 import time
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 import yfinance as yf
 
 from bot.services.formatting import label
-from bot.services.llm import call_llm_light
 from bot.services.stock import is_taiwan_stock, get_stock_summary
 logger = logging.getLogger(__name__)
 
@@ -72,6 +71,25 @@ def _price_overview(tw: list[str], us: list[str], prices: dict) -> str:
         sections.append(f"{header}\n{html.escape(lines)}" if show_headers else html.escape(lines))
 
     return "💼 自選股行情\n\n" + "\n\n".join(sections)
+
+
+def _headline_block(ticker: str, label_text: str, items: list[dict]) -> str:
+    """一支股票的新聞標題與連結。
+
+    刻意不做 AI 摘要。新聞是整個系統裡唯一沒有證據包紀律的路徑——
+    模型拿到的是裸標題，寫出來的句子無從溯源，實測連續出過兩種幻覺：
+    把 NVIDIA 的內容寫成台積電的、把 Druckenmiller 說成巴菲特的人。
+    三個標題自己掃兩秒就懂，模型的加值抵不過它編造的風險。
+    """
+    head = f"<b>{html.escape(label_text)}</b>"
+    if not items:
+        return f"{head}\n（本日無相關新聞）"
+    lines = []
+    for item in items[:4]:
+        title = html.escape(item["title"][:80])
+        url = item.get("url")
+        lines.append(f'• <a href="{html.escape(url)}">{title}</a>' if url else f"• {title}")
+    return head + "\n" + "\n".join(lines)
 
 
 _48H = 48 * 3600
@@ -187,21 +205,6 @@ def _build_news_data(tickers: list[str], names: dict[str, str]) -> dict:
     return {t: _fetch_news(t, names.get(t, "")) for t in tickers}
 
 
-def _parse_llm_sections(text: str, tickers: list[str]) -> dict[str, str]:
-    # Allow dots for tickers like BRK.B
-    pattern = re.compile(r"\[([A-Z0-9.]+)\]", re.IGNORECASE)
-    parts = pattern.split(text)
-    result = {}
-    i = 1
-    while i + 1 < len(parts):
-        t = parts[i].upper().strip()
-        body = parts[i + 1].strip()
-        if t in [x.upper() for x in tickers]:
-            result[t] = body
-        i += 2
-    return result
-
-
 async def fetch_and_summarize(tickers: list[str]) -> str:
     """自選股快報（HTML）：行情總覽（異動排前）→ 重點分析（有新聞或大漲跌）→ 無大事收合。"""
     # 先抓報價：新聞過濾要用公司名稱比對標題，而名稱在報價結果裡。
@@ -227,7 +230,7 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
     def _label(t: str) -> str:
         return label(t, prices.get(t, {}))
 
-    # 有新聞或單日漲跌 >= 3% 才進重點分析；其餘收合成一行
+    # 有新聞或單日漲跌 >= 3% 才單獨列出；其餘收合成一行
     active = [
         t for t in ordered
         if news_items.get(t) or abs(_day_pct(prices.get(t, {})) or 0) >= _BIG_MOVE_PCT
@@ -239,50 +242,10 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
     parts.append(_price_overview(ordered_tw, ordered_us, prices))
 
     if active:
-        today = date.today().strftime("%Y/%m/%d")
-        news_block = "\n\n".join(
-            f"=== {t} ===\n" + (
-                "\n".join(f"- {i['title']}" for i in news_items[t]) if news_items.get(t) else "（無新聞）"
-            )
+        parts.append("📰 新聞標題\n\n" + "\n\n".join(
+            _headline_block(t, _label(t), news_items.get(t, []))
             for t in active
-        )
-        system = "你是一位專業股票研究員。根據提供的新聞標題，為每支股票寫簡短分析。用繁體中文，語氣簡潔專業。"
-        user = f"""今天日期：{today}
-
-以下是各股票的最新新聞標題。請針對每支股票寫 2-3 句新聞摘要，最後一行標出影響方向。
-若無新聞則只輸出「（本日無相關新聞）」。
-
-輸出規則：
-- 每支股票以 [代號] 開頭（例如 [2408]、[MU]）
-- 純文字，不要使用 # ## ** 等符號
-- 影響方向用：▲ 正面 / ▼ 負面 / ● 中性
-- 只能根據上面列出的標題寫，不得補充標題以外的資訊
-- **不得補充人物身分、任職公司、職稱、公司之間的關係**。標題寫
-  「Billionaire Stanley Druckenmiller」就只能寫「億萬富翁德魯肯米勒」，
-  不可以自行補上他在哪家公司——實測模型把他寫成「巴菲特旗下公司主管」，
-  而他與巴菲特毫無關係
-- 標題若主要在講別家公司，就當作沒有這則，不要改寫成這家公司的說法
-- 沒有任何一則與該股票直接相關時，整段只輸出「（本日無直接相關新聞）」
-
-{news_block}"""
-
-        # 新聞摘要屬低難度任務，用輕量模型（每天晨報都會呼叫，省成本）
-        llm_output = await asyncio.to_thread(call_llm_light, system, user)
-        sections = _parse_llm_sections(llm_output, active)
-
-        analysis_parts = []
-        for t in active:
-            analysis = sections.get(t.upper(), "（無資料）")
-            block = f"<b>{html.escape(_label(t))}</b>\n{html.escape(analysis)}"
-            items_with_url = [i for i in news_items.get(t, []) if i.get("url")]
-            if items_with_url:
-                links = "\n".join(
-                    f'• <a href="{html.escape(i["url"])}">{html.escape(i["title"][:55])}{"…" if len(i["title"]) > 55 else ""}</a>'
-                    for i in items_with_url[:3]
-                )
-                block += f"\n{links}"
-            analysis_parts.append(block)
-        parts.append("📌 重點分析\n\n" + "\n\n".join(analysis_parts))
+        ))
 
     if quiet:
         quiet_labels = "、".join(_label(t) for t in quiet)

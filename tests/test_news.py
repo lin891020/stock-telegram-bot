@@ -129,3 +129,39 @@ def test_html_entities_in_titles_are_decoded():
     import html
     raw = "Elon Musk Calls Gavin Newsom&#x27;s Plan"
     assert html.unescape(raw) == "Elon Musk Calls Gavin Newsom's Plan"
+
+
+# ---- 新聞改成只列標題 ---------------------------------------------------
+
+def test_headline_block_lists_titles_with_links():
+    from bot.services.news import _headline_block
+    out = _headline_block("NVDA", "NVIDIA(NVDA)", [
+        {"title": "Nvidia could hit a $13 trillion market cap", "url": "https://x.test/1"},
+    ])
+    assert "NVIDIA(NVDA)" in out
+    assert 'href="https://x.test/1"' in out
+    assert "13 trillion" in out
+
+
+def test_headline_block_says_so_when_empty():
+    from bot.services.news import _headline_block
+    assert "（本日無相關新聞）" in _headline_block("2454", "聯發科(2454)", [])
+
+
+def test_headline_block_escapes_titles():
+    """標題來自外部，未跳脫的 < 會讓整則 HTML 訊息送不出去。"""
+    from bot.services.news import _headline_block
+    out = _headline_block("X", "X", [{"title": "a <b> & c", "url": "https://x.test"}])
+    assert "<b> &" not in out.replace("<b>X</b>", "")
+
+
+def test_news_pipeline_makes_no_llm_call(monkeypatch):
+    """新聞是唯一沒有證據包紀律的路徑，實測連續出過兩種幻覺。
+
+    改成只列標題之後，這條路徑不該再碰模型。
+    """
+    import bot.services.news as news_mod
+    assert not hasattr(news_mod, "call_llm_light"), "news 不應再依賴 LLM"
+    import inspect
+    src = inspect.getsource(news_mod.fetch_and_summarize)
+    assert "call_llm" not in src
