@@ -75,7 +75,11 @@ def test_missing_name_forbids_guessing():
 
 # ---- 累計數 vs 單季數：FinMind 同一個 API 兩種語意 ----------------------
 
-def _rows(pairs):
+def _dated(pairs):
+    """(日期, 值) 序列 → FinMind 的列格式。
+
+    注意：本檔上方已有一個同名不同簽名的 _rows，不要再用那個名字。
+    """
     return [{"date": d, "value": v} for d, v in pairs]
 
 
@@ -94,7 +98,7 @@ def test_cumulative_takes_last_period_not_the_sum():
     實測：加總得 4.28 兆，真實全年 1.83 兆。每份台股分析都吃到過。
     """
     from bot.services.financials import _annual_cumulative
-    out = _annual_cumulative(_rows(_TSMC_OCF_2024), "value")
+    out = _annual_cumulative(_dated(_TSMC_OCF_2024), "value")
     assert out["2024"] == 1_826_177_068_000
 
 
@@ -105,7 +109,7 @@ def test_flow_sums_because_income_statement_is_per_quarter():
     2.89 兆正好等於台積電實際的 2024 全年營收。
     """
     from bot.services.financials import _annual_flow
-    rows = _rows([
+    rows = _dated([
         ("2024-03-31", 592_600_000_000),
         ("2024-06-30", 673_500_000_000),
         ("2024-09-30", 759_700_000_000),
@@ -117,7 +121,7 @@ def test_flow_sums_because_income_statement_is_per_quarter():
 def test_partial_year_cumulative_is_labelled():
     """半年只有兩列，最後一列就是上半年累計——標明不是全年。"""
     from bot.services.financials import _annual_cumulative
-    out = _annual_cumulative(_rows(_TSMC_OCF_2024[:2]), "value")
+    out = _annual_cumulative(_dated(_TSMC_OCF_2024[:2]), "value")
     key = next(iter(out))
     assert "截至 06-30 累計" in key and "非全年" in key
     assert out[key] == 814_000_000_000
@@ -126,5 +130,5 @@ def test_partial_year_cumulative_is_labelled():
 def test_cumulative_and_flow_disagree_on_the_same_input():
     """同一份資料兩種讀法差很多——所以挑錯函式是靜默的錯誤。"""
     from bot.services.financials import _annual_cumulative, _annual_flow
-    rows = _rows(_TSMC_OCF_2024)
+    rows = _dated(_TSMC_OCF_2024)
     assert _annual_flow(rows, "value")["2024"] / _annual_cumulative(rows, "value")["2024"] > 2.3
