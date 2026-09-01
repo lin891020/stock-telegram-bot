@@ -17,7 +17,32 @@ def _extract(data: dict):
 
 
 def _unit(data: dict) -> str:
-    return "元" if data.get("market") == "TW" else "USD"
+    return unit_for(data.get("market"))
+
+
+def unit_for(market: str | None) -> str:
+    return "元" if market == "TW" else "USD"
+
+
+def money(price: float, market: str | None) -> str:
+    """「4,315.00 元」／「217.55 USD」。
+
+    千分位與單位不是裝飾——提醒推播以前寫 `{price:.2f}`，
+    台積電觸發時你看到的是「1105.00」，一眼讀不出量級。
+    """
+    return f"{price:,.2f} {unit_for(market)}"
+
+
+def price_with_change(price: float, prev, market: str | None) -> str:
+    """「4,315.00 元  ▲ +9.94%（+390.00）」——報價與提醒共用的那一段。
+
+    報價說「收」、提醒說「現價」，前綴不同但數字的寫法必須一樣。
+    以前三處各寫一份，於是同一支股票在卡片、漲跌停推播、價格提醒裡
+    長成三個樣子。
+    """
+    body = money(price, market)
+    change = change_str(price, prev)
+    return f"{body}  {change}" if change else body
 
 
 def _as_of(data: dict) -> str:
@@ -66,10 +91,7 @@ def quote_line(ticker: str, data: dict, multiline: bool = False) -> str:
         sep = "\n" if multiline else "："
         return f"{lbl}{sep}無報價"
     sep = "\n" if multiline else "  "
-    body = f"收 {price:,.2f} {_unit(data)}"
-    chg = change_str(price, prev)
-    if chg:
-        body += f"  {chg}"
+    body = f"收 {price_with_change(price, prev, data.get('market'))}"
     as_of = _as_of(data)
     if as_of:
         body += f"  {as_of}"
