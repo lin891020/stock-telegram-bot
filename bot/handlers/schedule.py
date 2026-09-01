@@ -15,7 +15,9 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
 from bot.auth import restrict_callback
-from bot.handlers.digest import send_daily_news, send_tw_closing
+from bot.handlers.digest import (
+    send_daily_news, send_noon_snapshot, send_tw_closing, send_us_closing,
+)
 from bot.services import clock
 from bot.services.settings import get_time, parse_hhmm, set_time
 
@@ -33,7 +35,11 @@ class Job:
 # /settime 的參數名 → 這個 job。新增排程只要在這裡加一筆。
 _JOBS: dict[str, Job] = {
     "news": Job("daily_news", "news", send_daily_news, "起床報",
-                ("05:30", "06:00", "06:30", "07:00", "07:30")),
+                ("06:00", "06:30", "07:00", "07:30")),
+    "us": Job("us_closing", "us_close", send_us_closing, "美股收盤速報",
+              ("05:00", "05:30", "06:00", "22:00")),
+    "noon": Job("noon_snapshot", "noon", send_noon_snapshot, "台股盤中速報",
+                ("11:00", "12:00", "13:00")),
     "tw": Job("tw_closing", "tw_close", send_tw_closing, "台股收盤速報",
               ("14:00", "14:30", "15:00")),
 }
@@ -79,8 +85,9 @@ async def settime_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not context.args:
         await update.message.reply_text(
             f"目前推送時間（台北時間，週末不推送）：\n{_current_times()}\n\n"
-            "點按鈕直接改（上排：起床報，下排：台股收盤），\n"
-            "或輸入自訂時間：/settime 06:45、/settime tw 14:10",
+            "點按鈕直接改（由上而下依序對應上面四項），\n"
+            "或輸入自訂時間：/settime 06:45、/settime tw 14:10、\n"
+            "/settime us 05:00、/settime noon 11:30",
             reply_markup=_settime_keyboard(),
         )
         return

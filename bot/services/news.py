@@ -6,7 +6,8 @@ import time
 from datetime import datetime, timezone
 import yfinance as yf
 
-from bot.services.formatting import label
+from bot.services.big_moves import classify_move
+from bot.services.formatting import label, price_with_change
 from bot.services.stock import is_taiwan_stock, get_stock_summary
 logger = logging.getLogger(__name__)
 
@@ -27,17 +28,22 @@ def _day_pct(stock_data: dict):
 
 
 def _price_line(ticker: str, stock_data: dict) -> str:
+    """晨報的一行報價。
+
+    格式走 formatting.price_with_change，跟 /price、卡片、收盤速報、
+    提醒推播同一份——晨報以前自己寫了一份（沒有單位、沒有絕對漲跌），
+    於是同一支股票早上跟下午長得不一樣。
+    """
     lbl = label(ticker, stock_data)
-    price = stock_data.get("price") or stock_data.get("close") if isinstance(stock_data, dict) else None
+    if not isinstance(stock_data, dict):
+        return f"{lbl}  無報價"
+    price = stock_data.get("price") or stock_data.get("close")
     if not price:
         return f"{lbl}  無報價"
     pct = _day_pct(stock_data)
-    if pct is None:
-        return f"{lbl}  {price:,.2f}"
-    arrow = "▲" if pct >= 0 else "▼"
-    sign = "+" if pct >= 0 else ""
-    warn = " ⚠️" if abs(pct) >= _BIG_MOVE_PCT else ""
-    return f"{lbl}  {price:,.2f}  {arrow} {sign}{pct:.2f}%{warn}"
+    warn = " ⚠️" if pct is not None and abs(pct) >= _BIG_MOVE_PCT else ""
+    body = price_with_change(price, stock_data.get("prev_close"), stock_data.get("market"))
+    return f"{lbl}  {body}{warn}"
 
 
 def _tw_as_of(tw: list[str], prices: dict) -> str:
@@ -212,8 +218,42 @@ def _build_news_data(tickers: list[str], names: dict[str, str]) -> dict:
     return {t: _fetch_news(t, names.get(t, "")) for t in tickers}
 
 
-async def fetch_and_summarize(tickers: list[str]) -> str:
-    """自選股快報（HTML）：行情總覽（異動排前）→ 重點分析（有新聞或大漲跌）→ 無大事收合。"""
+def _short(ticker: str, prices: dict) -> str:
+    """摘要行用的短名稱：只寫公司名，不帶代號（那一行要塞好幾支）。"""
+    data = prices.get(ticker) or {}
+    name = data.get("name") if isinstance(data, dict) else ""
+    return name or ticker
+
+
+def _highlight(movers: list[str], prices: dict) -> str:
+    """最上面那一行：今天到底要看什麼。
+
+    以前整則晨報 67 行、其中 76% 是新聞，今天真正的重點（聯發科漲停）
+    要滑過 51 行才拼得出來。這一行是為了讓你三秒內知道今天有沒有事。
+    """
+    bits = []
+    for ticker in movers:
+        pct = _day_pct(prices.get(ticker, {}))
+        if pct is None:
+            continue
+        data = prices.get(ticker) or {}
+        move = classify_move(ticker, data.get("price") or data.get("close"),
+                             data.get("prev_close"))
+        tag = f"（{move['headline']}）" if move else ""
+        bits.append(f"{_short(ticker, prices)} {pct:+.2f}%{tag}")
+    if not bits:
+        return ""
+    return "⚠️ 今天要看\n" + html.escape("、".join(bits))
+
+
+async def fetch_and_summarize(tickers: list[str], market_block: str = "") -> str:
+    """自選股快報（HTML）。
+
+    版面順序：今天要看 → 大盤（由呼叫端傳入）→ 行情總覽 → 異動股的新聞。
+
+    新聞只給今天有異動（±3%）的股票。以前的規則是「有新聞或有異動」，
+    但每支股票每天都有新聞，於是十支列了九支，「無大事」的收合形同失效。
+    """
     # 先抓報價：新聞過濾要用公司名稱比對標題，而名稱在報價結果裡。
     # 多一個往返，但晨報一天只跑一次，換來的是不會把別家公司的新聞
     # 摘要成這家的。
@@ -223,7 +263,12 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
         t: (prices[t].get("name") or "") if isinstance(prices[t], dict) else ""
         for t in tickers
     }
-    news_items = await asyncio.to_thread(_build_news_data, tickers, names)
+    # 只有異動股的新聞會被列出來，其餘不必打網路（十支變三支）
+    movers_for_news = [
+        t for t in tickers
+        if abs(_day_pct(prices.get(t, {})) or 0) >= _BIG_MOVE_PCT
+    ]
+    news_items = await asyncio.to_thread(_build_news_data, movers_for_news, names)
 
     def _sort_key(t: str):
         pct = _day_pct(prices.get(t, {}))
@@ -237,25 +282,31 @@ async def fetch_and_summarize(tickers: list[str]) -> str:
     def _label(t: str) -> str:
         return label(t, prices.get(t, {}))
 
-    # 有新聞或單日漲跌 >= 3% 才單獨列出；其餘收合成一行
-    active = [
-        t for t in ordered
-        if news_items.get(t) or abs(_day_pct(prices.get(t, {})) or 0) >= _BIG_MOVE_PCT
-    ]
-    quiet = [t for t in ordered if t not in active]
+    # 只有今天真的在動的才單獨列新聞
+    movers = [t for t in ordered if abs(_day_pct(prices.get(t, {})) or 0) >= _BIG_MOVE_PCT]
+    quiet = [t for t in ordered if t not in movers]
 
     parts = []
 
+    highlight = _highlight(movers, prices)
+    if highlight:
+        parts.append(highlight)
+    if market_block:
+        parts.append(market_block)
+
     parts.append(_price_overview(ordered_tw, ordered_us, prices))
 
-    if active:
-        parts.append("📰 新聞標題\n\n" + "\n\n".join(
+    if movers:
+        parts.append("📰 今日異動股的新聞\n\n" + "\n\n".join(
             _headline_block(t, _label(t), news_items.get(t, []))
-            for t in active
+            for t in movers
         ))
 
     if quiet:
-        quiet_labels = "、".join(_label(t) for t in quiet)
-        parts.append(html.escape(f"😴 無大事：{quiet_labels}"))
+        parts.append(html.escape(
+            f"😴 其餘 {len(quiet)} 支無異動，新聞可用 /news 查看"
+            if movers else
+            f"😴 今天 {len(quiet)} 支都沒有明顯異動，新聞可用 /news 查看"
+        ))
 
     return "\n\n".join(parts)

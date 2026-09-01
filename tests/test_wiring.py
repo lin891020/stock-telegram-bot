@@ -54,10 +54,32 @@ def test_error_handler_is_registered(app):
 def test_all_scheduled_jobs_are_present(app):
     names = {job.name for job in app.job_queue.jobs()}
     expected = {
-        "daily_news", "tw_closing", "alert_check",
-        "big_move_check", "earnings_poll", "health_watchdog",
+        "daily_news", "us_closing", "noon_snapshot", "tw_closing",
+        "alert_check", "big_move_check", "earnings_poll", "health_watchdog",
     }
     assert expected <= names, f"少了排程：{expected - names}"
+
+
+def test_every_job_in_the_table_gets_scheduled(app):
+    """_JOBS 是新增定時推播的唯一入口，漏掛的話那則推播就永遠不會發。"""
+    from bot.handlers.schedule import _JOBS
+
+    names = {job.name for job in app.job_queue.jobs()}
+    missing = {j.name for j in _JOBS.values()} - names
+    assert not missing, f"_JOBS 裡有但沒掛上：{missing}"
+
+
+def test_daily_pushes_are_in_a_sensible_order(app):
+    """一天的順序：美股收盤 → 起床報 → 台股盤中 → 台股收盤。
+
+    順序錯了不會有任何錯誤訊息，只會讓你在奇怪的時間收到東西。
+    """
+    jobs = {job.name: job for job in app.job_queue.jobs()}
+    from bot.services.settings import get_time
+
+    order = ["us_close", "news", "noon", "tw_close"]
+    times = [get_time(k) for k in order]
+    assert times == sorted(times), f"推播時間沒有由早到晚：{dict(zip(order, times))}"
 
 
 def _cron_minutes(job) -> int:

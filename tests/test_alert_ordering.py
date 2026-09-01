@@ -5,6 +5,14 @@
 """
 import pytest
 
+
+def _quote(price, prev):
+    """intraday_quote 是 async 的；測試要換掉它就得回 coroutine。"""
+    async def _q(_ticker):
+        return price, prev
+    return _q
+
+
 import bot.handlers.alert as alert_mod
 from conftest import FakeBot, FakeContext
 
@@ -21,7 +29,8 @@ def wiring(monkeypatch):
         alert_mod, "remove_alert",
         lambda uid, aid: state["removed"].append((uid, aid)),
     )
-    monkeypatch.setattr(alert_mod, "_fetch_quote_sync", lambda t: (1100.0, 1050.0))
+    monkeypatch.setattr(alert_mod, "intraday_quote",
+                        _quote(1100.0, 1050.0))
     return state
 
 
@@ -48,7 +57,8 @@ async def test_keeps_alert_when_push_fails(wiring):
 
 @pytest.mark.asyncio
 async def test_untriggered_alert_is_left_alone(monkeypatch, wiring):
-    monkeypatch.setattr(alert_mod, "_fetch_quote_sync", lambda t: (900.0, 890.0))
+    monkeypatch.setattr(alert_mod, "intraday_quote",
+                        _quote(900.0, 890.0))
     ctx = FakeContext()
     await alert_mod.check_alerts(ctx)
 
@@ -59,7 +69,8 @@ async def test_untriggered_alert_is_left_alone(monkeypatch, wiring):
 @pytest.mark.asyncio
 async def test_missing_quote_does_not_trigger(monkeypatch, wiring):
     """抓不到報價時不能當成觸發——不然資料源一抖動就狂噴通知。"""
-    monkeypatch.setattr(alert_mod, "_fetch_quote_sync", lambda t: (None, None))
+    monkeypatch.setattr(alert_mod, "intraday_quote",
+                        _quote(None, None))
     ctx = FakeContext()
     await alert_mod.check_alerts(ctx)
 

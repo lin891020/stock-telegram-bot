@@ -14,7 +14,7 @@ from bot.services.alerts import (
     get_alerts, add_alert, remove_alert, all_alerts,
 )
 from bot.services.big_moves import classify_move, mark_sent, was_sent
-from bot.services.stock import is_taiwan_stock, looks_like_ticker
+from bot.services.stock import intraday_quote, is_taiwan_stock, looks_like_ticker
 from bot.services.tw_stocks import get_tw_name
 from bot.services.watchlist import iter_watchlists
 
@@ -148,20 +148,6 @@ def _us_market_open(taipei_now: datetime) -> bool:
     return False
 
 
-def _fetch_quote_sync(ticker: str) -> tuple:
-    """Return (last_price, prev_close) or (None, None). 台股含上櫃 fallback。"""
-    symbols = [f"{ticker}.TW", f"{ticker}.TWO"] if is_taiwan_stock(ticker) else [ticker]
-    for symbol in symbols:
-        try:
-            info = yf.Ticker(symbol).fast_info
-            if info.last_price:
-                return info.last_price, info.previous_close
-        except Exception:
-            continue
-    logger.warning("alert quote failed for %s", ticker)
-    return None, None
-
-
 async def check_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
     """每 10 分鐘執行：檢查盤中市場的提醒，觸發即推送並移除。"""
     try:
@@ -189,7 +175,7 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         tickers = sorted({a["ticker"] for _, a in active})
         quotes = await asyncio.gather(
-            *[asyncio.to_thread(_fetch_quote_sync, t) for t in tickers]
+            *[intraday_quote(t) for t in tickers]
         )
         quote_map = dict(zip(tickers, quotes))
 
@@ -245,7 +231,7 @@ async def check_big_moves(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         tickers = sorted({t for _, t, _ in targets})
         quotes = await asyncio.gather(
-            *[asyncio.to_thread(_fetch_quote_sync, t) for t in tickers]
+            *[intraday_quote(t) for t in tickers]
         )
         quote_map = dict(zip(tickers, quotes))
 

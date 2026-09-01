@@ -118,6 +118,40 @@ async def _fetch_month(client: httpx.AsyncClient, stock_no: str, query_date: dat
             await asyncio.sleep(2 ** attempt)
     return []
 
+def _intraday_sync(ticker: str) -> tuple:
+    """(現價, 前收) 或 (None, None)。台股含上櫃 fallback。
+
+    跟 get_stock_summary 的差別是**時效**：台股報價走 TWSE 盤後結算，
+    盤中查到的是前一個交易日的收盤；這裡走 yfinance 的日線，盤中的
+    最後一列就是即時價。價格提醒、漲跌停偵測、盤中速報都用這條。
+
+    ⚠️ 不要改回 fast_info.previous_close——它會給錯的前收。實測 2026-09-01：
+
+        台積電  fast_info 說 2,395（那是當天開盤價）  正確是 2,405
+        南亞科  fast_info 說   549（什麼都不是）      正確是   543
+        聯發科  fast_info 說 3,925  ✓ 剛好對
+
+    前收是漲跌停價與 ±5% 提醒的分母，錯了會漏報或誤報。日線的倒數第二列
+    才是可靠的，而且實測還比 fast_info 快（16ms vs 39ms）。
+    """
+    symbols = [f"{ticker}.TW", f"{ticker}.TWO"] if is_taiwan_stock(ticker) else [ticker]
+    for symbol in symbols:
+        try:
+            closes = yf.Ticker(symbol).history(period="5d")["Close"].dropna()
+            if len(closes) >= 2:
+                return float(closes.iloc[-1]), float(closes.iloc[-2])
+            if len(closes) == 1:
+                return float(closes.iloc[-1]), None
+        except Exception:
+            continue
+    logger.warning("intraday quote failed for %s", ticker)
+    return None, None
+
+
+async def intraday_quote(ticker: str) -> tuple:
+    return await asyncio.to_thread(_intraday_sync, ticker)
+
+
 def _fetch_tw_via_yf(ticker: str) -> dict:
     """上櫃股票不在 TWSE 上市 API，fallback 到 yfinance（.TWO 上櫃 / .TW 上市）。"""
     from bot.services.tw_stocks import get_tw_name

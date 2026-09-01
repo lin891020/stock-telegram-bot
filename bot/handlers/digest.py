@@ -15,10 +15,10 @@ from telegram.ext import CommandHandler, ContextTypes
 
 from bot.handlers.messaging import send_long
 from bot.services import clock
-from bot.services.formatting import quote_line
+from bot.services.formatting import name_label, price_with_change, quote_line
 from bot.services.market import fetch_market_summary
 from bot.services.news import fetch_and_summarize
-from bot.services.stock import get_stock_summary, is_taiwan_stock
+from bot.services.stock import get_stock_summary, intraday_quote, is_taiwan_stock
 from bot.services.watchlist import get_watchlist, iter_watchlists
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,8 @@ async def _closing_lines(tickers: list[str], market: str, skip_stale: bool) -> l
             continue
         if skip_stale and market == "TW" and _is_stale_tw_quote(data):
             continue
-        lines.append(quote_line(ticker, data))
+        # 標題已經寫了日期；skip_stale 保證每一行都是今天的，所以不重複掛
+        lines.append(quote_line(ticker, data, show_date=not skip_stale))
     return lines
 
 
@@ -79,6 +80,62 @@ async def send_closing_digest(context: ContextTypes.DEFAULT_TYPE, market: str) -
 
 async def send_tw_closing(context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_closing_digest(context, "TW")
+
+
+async def send_us_closing(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """美股收盤速報。
+
+    美股 16:00 ET 收盤，換算台北是隔天清晨 04:00（夏令）或 05:00（冬令），
+    所以預設排在 05:30——兩種都涵蓋，而且還在 06:30 起床報之前。
+    """
+    await send_closing_digest(context, "US")
+
+
+# ── 盤中速報 ──────────────────────────────────────────────────────────
+
+async def _intraday_lines(tickers: list[str]) -> list[str]:
+    """盤中的每一行。
+
+    ⚠️ 這裡不能用 get_stock_summary：台股報價走 TWSE 盤後結算，中午查
+    只會拿到**前一個交易日**的收盤價，而畫面上看不出來。走 yfinance 的
+    即時價（跟價格提醒同一條路），並標「現價」而不是「收」。
+    """
+    quotes = await asyncio.gather(*[intraday_quote(t) for t in tickers])
+    lines = []
+    for ticker, (price, prev) in zip(tickers, quotes):
+        if price is None:
+            continue
+        market = "TW" if is_taiwan_stock(ticker) else "US"
+        label = name_label(ticker, _watch_name(ticker))
+        lines.append(f"{label}  現價 {price_with_change(price, prev, market)}")
+    return lines
+
+
+def _watch_name(ticker: str) -> str:
+    for _, items in iter_watchlists():
+        if ticker in items:
+            return items[ticker] or ""
+    return ""
+
+
+async def send_noon_snapshot(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """台股盤中速報（預設中午 12:00，台股 09:00–13:30 開盤中）。"""
+    if clock.is_weekend():
+        return
+    for user_id_str, items in iter_watchlists():
+        tickers = _for_market(items, "TW")
+        if not tickers:
+            continue
+        try:
+            lines = await _intraday_lines(tickers)
+            if lines:
+                await context.bot.send_message(
+                    chat_id=int(user_id_str),
+                    text=f"🕛 台股盤中速報 {clock.today_str('%m/%d')} "
+                         f"{clock.now():%H:%M}\n\n" + "\n".join(lines),
+                )
+        except Exception as e:
+            logger.error("Noon snapshot failed for user %s: %s", user_id_str, e, exc_info=True)
 
 
 # ── 起床報 ────────────────────────────────────────────────────────────

@@ -7,10 +7,12 @@ from bot.services.store import load_json, save_json
 _FILE = Path("data/settings.json")
 
 # Schedule keys → (settings.json field, default Taipei time)
-# 美股收盤已併入起床報（news），不再獨立排程
+# 時間一律台北時間；轉成 UTC 只在 clock.utc_time_for 一處。
 TIME_KEYS: dict[str, tuple[str, str]] = {
-    "news": ("daily_news_time", "06:30"),
-    "tw_close": ("tw_close_time", "14:00"),
+    "news": ("daily_news_time", "06:30"),      # 起床報
+    "us_close": ("us_close_time", "05:30"),    # 美股收盤（16:00 ET，夏令 04:00／冬令 05:00 台北）
+    "noon": ("noon_time", "12:00"),            # 台股盤中（09:00–13:30 開盤）
+    "tw_close": ("tw_close_time", "14:00"),    # 台股收盤（13:30 收，留緩衝給結算）
 }
 
 DEFAULT_NEWS_TIME = TIME_KEYS["news"][1]

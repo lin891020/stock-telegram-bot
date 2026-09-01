@@ -83,8 +83,14 @@ def change_str(price: float, prev) -> str:
     return f"{arrow} {sign}{pct:.2f}%（{sign}{price - prev:.2f}）"
 
 
-def quote_line(ticker: str, data: dict, multiline: bool = False) -> str:
-    """單行（或標籤換行）報價，用於 /price、晨報、收盤速報、卡片。"""
+def quote_line(ticker: str, data: dict, multiline: bool = False,
+               show_date: bool = True) -> str:
+    """單行（或標籤換行）報價，用於 /price、卡片、收盤速報。
+
+    show_date=False 給「標題已經寫了日期」的場合。收盤速報四行各掛一次
+    「（9/1 收盤）」是純噪音——但只有在確定每一行都是今天的資料時才能關，
+    否則就退回原本那個「盤中查詢拿到昨天收盤卻看不出來」的坑。
+    """
     lbl = label(ticker, data)
     price, prev = _extract(data)
     if not price:
@@ -92,7 +98,7 @@ def quote_line(ticker: str, data: dict, multiline: bool = False) -> str:
         return f"{lbl}{sep}無報價"
     sep = "\n" if multiline else "  "
     body = f"收 {price_with_change(price, prev, data.get('market'))}"
-    as_of = _as_of(data)
+    as_of = _as_of(data) if show_date else ""
     if as_of:
         body += f"  {as_of}"
     return f"{lbl}{sep}{body}"
