@@ -10,6 +10,7 @@ import logging
 import traceback
 
 from telegram import Update
+from telegram.error import NetworkError
 from telegram.ext import ContextTypes
 
 from bot.config import ALLOWED_TELEGRAM_ID
@@ -34,8 +35,27 @@ def _describe(update: object) -> str:
     return ""
 
 
+def _is_transient_polling_blip(update: object, error: BaseException) -> bool:
+    """長輪詢的連線瞬斷——會自己好，不該拿去吵使用者。
+
+    VM 上跟 Telegram 之間的 TCP 連線閒置久了會被中間設備收掉，
+    get_updates 就拋 NetworkError。PTB 的 network_retry_loop 本來就會重連，
+    但它同時把例外丟進這裡，於是使用者收到一則有 traceback 的紅色錯誤，
+    看起來像 bot 掛了——實際上下一秒就恢復了。實測一個晚上收到兩則。
+
+    只在「沒有 update」時當成瞬斷。使用者正在操作時發生的網路錯誤代表
+    他那個指令真的失敗了，那必須說。
+    """
+    return isinstance(error, NetworkError) and not isinstance(update, Update)
+
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     context_desc = _describe(update)
+
+    if _is_transient_polling_blip(update, context.error):
+        logger.warning("長輪詢連線瞬斷（會自動重連）：%s", context.error)
+        return
+
     logger.error("未捕捉的例外（%s）", context_desc or "無 update", exc_info=context.error)
 
     chat_id = None

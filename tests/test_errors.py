@@ -107,3 +107,43 @@ async def test_stays_under_limit_with_escape_heavy_traceback():
     assert len(ctx.bot.sent) == 1, "訊息根本沒送出去"
     assert len(ctx.bot.texts[0]) <= 4096
     assert ctx.bot.texts[0].count("<pre>") == ctx.bot.texts[0].count("</pre>"), "HTML 標籤被截斷"
+
+
+# ── 網路瞬斷不該吵使用者 ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_polling_network_blip_is_not_reported():
+    """長輪詢連線被中間設備收掉會自己重連，不該送紅色錯誤給使用者。
+
+    實測一個晚上收到兩則帶 traceback 的「❌ 出了未預期的錯誤」，
+    看起來像 bot 掛了，其實下一秒就恢復。
+    """
+    from telegram.error import NetworkError
+
+    ctx = FakeContext()
+    ctx.error = NetworkError("httpx.ReadError: ")
+    await errors_mod.error_handler(None, ctx)   # 沒有 update ＝ 來自 get_updates
+    assert ctx.bot.sent == [], "網路瞬斷不該推播"
+
+
+@pytest.mark.asyncio
+async def test_timeout_during_polling_is_also_quiet():
+    """TimedOut 是 NetworkError 的子類，同樣會自己重連。"""
+    from telegram.error import TimedOut
+
+    ctx = FakeContext()
+    ctx.error = TimedOut()
+    await errors_mod.error_handler(None, ctx)
+    assert ctx.bot.sent == []
+
+
+@pytest.mark.asyncio
+async def test_network_error_during_a_user_action_is_still_reported():
+    """使用者正在操作時的網路錯誤代表那個指令真的失敗了，必須說。"""
+    from telegram.error import NetworkError
+
+    ctx = FakeContext()
+    ctx.error = NetworkError("連不上")
+    await errors_mod.error_handler(_update(text="/price 2330"), ctx)
+    assert ctx.bot.sent, "使用者操作失敗卻不通知，等於靜默失敗"
+    assert "NetworkError" in ctx.bot.texts[0]

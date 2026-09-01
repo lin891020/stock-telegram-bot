@@ -1,8 +1,11 @@
-import re
 import asyncio
+import logging
+import re
 import httpx
 import yfinance as yf
 from datetime import date, timedelta
+
+logger = logging.getLogger(__name__)
 
 _CORP_SUFFIX = re.compile(
     r",?\s*(Inc\.?|Corp\.?|Corporation|Ltd\.?|LLC|Co\.?|Holdings?|Group|PLC|S\.A\.?|N\.V\.?)\.?\s*$",
@@ -100,8 +103,17 @@ async def _fetch_month(client: httpx.AsyncClient, stock_no: str, query_date: dat
             resp.raise_for_status()
             data = resp.json()
             return data.get("data", []) if data.get("stat") == "OK" else []
-        except (httpx.HTTPStatusError, httpx.RequestError):
+        # ValueError 是為了 JSONDecodeError：TWSE 忙的時候會回 HTTP 200
+        # 但內容是 HTML 錯誤頁，resp.json() 就炸了。它不是 httpx 的例外，
+        # 以前漏在這個 except 外面——於是不但沒重試，還一路往上炸掉整張
+        # 股票卡片（實測按 2454 的按鈕收到 JSONDecodeError traceback）。
+        # 而且五個月份是 gather 併發抓的，一個月壞掉就全毀。
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as e:
             if attempt == _MAX_RETRIES - 1:
+                logger.warning(
+                    "TWSE %s %s 連續 %d 次失敗：%s: %s",
+                    stock_no, query_date, _MAX_RETRIES, type(e).__name__, e,
+                )
                 return []
             await asyncio.sleep(2 ** attempt)
     return []
