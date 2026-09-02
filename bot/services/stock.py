@@ -171,6 +171,27 @@ def _intraday_sync(ticker: str) -> tuple:
     return None, None
 
 
+def _last_session_sync(ticker: str):
+    """該股票最後一根日線的**交易所當地**日期，拿不到回 None。
+
+    用來回答「今天這個市場有沒有收盤」——不用假日表：
+    週末、國定假日、颱風假、半日市，最後一根日線不是今天就是沒開。
+    """
+    symbols = [f"{ticker}.TW", f"{ticker}.TWO"] if is_taiwan_stock(ticker) else [ticker]
+    for symbol in symbols:
+        try:
+            closes = yf.Ticker(symbol).history(period="5d")["Close"].dropna()
+        except Exception:
+            continue
+        if not closes.empty:
+            return closes.index[-1].date()
+    return None
+
+
+async def last_session_date(ticker: str):
+    return await asyncio.to_thread(_last_session_sync, ticker)
+
+
 async def intraday_quote(ticker: str) -> tuple:
     return await asyncio.to_thread(_intraday_sync, ticker)
 

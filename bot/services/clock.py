@@ -13,10 +13,20 @@ VM 跑 UTC，但所有對使用者有意義的時間都是台北時間：排程�
 
 也就是星期一不推、星期六反而推，而且預設值 14:00 剛好不會發作。
 """
-from datetime import datetime, time, timedelta, timezone
+from datetime import date as _date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 # 台北沒有日光節約時間，固定 UTC+8
 TAIPEI = timezone(timedelta(hours=8))
+
+# 各市場自己的日曆。**推播是台北時間、市場是當地時間，兩者不能混用。**
+# 實測踩過：美股收盤速報排在台北 05:30，台北的星期六清晨其實是紐約的
+# 星期五傍晚——用台北日曆判斷週末，星期五的美股收盤永遠不會推，而星期一
+# 早上推的是星期五的資料卻標著星期一的日期。
+MARKET_TZ = {
+    "TW": ZoneInfo("Asia/Taipei"),
+    "US": ZoneInfo("America/New_York"),
+}
 
 
 def now() -> datetime:
@@ -40,3 +50,25 @@ def is_weekend() -> bool:
 def utc_time_for(hour: int, minute: int = 0) -> time:
     """把台北時間的時分轉成 run_daily 要的 UTC time。"""
     return time(hour=(hour - 8) % 24, minute=minute, tzinfo=timezone.utc)
+
+
+def market_now(market: str) -> datetime:
+    """該市場當地的現在。"""
+    return datetime.now(MARKET_TZ.get(market, TAIPEI))
+
+
+def market_today(market: str) -> _date:
+    return market_now(market).date()
+
+
+def market_today_str(market: str, fmt: str = "%Y/%m/%d") -> str:
+    return market_now(market).strftime(fmt)
+
+
+def market_is_weekend(market: str) -> bool:
+    """該市場當地的今天是不是週末。
+
+    只是省事的預先過濾——假日擋不住（感恩節是星期四）。真正的判斷是
+    「今天這個市場有沒有收盤」，由 stock.last_session_date 用資料回答。
+    """
+    return market_now(market).weekday() >= 5

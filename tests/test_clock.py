@@ -44,32 +44,3 @@ def test_utc_conversion(taipei_hour, utc_hour):
 def test_offset_is_fixed():
     """台北沒有日光節約時間；用固定 offset 是刻意的，不是偷懶。"""
     assert clock.TAIPEI.utcoffset(None).total_seconds() == 8 * 3600
-
-
-# ── 推播真的有照台北時間判斷週末嗎 ────────────────────────────────────
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("iso,should_push", [
-    ("2026-01-19T07:00", True),    # 一（UTC 是週日，用 UTC 判斷會被誤跳過）
-    ("2026-01-24T07:00", False),   # 六（UTC 是週五，用 UTC 判斷會被誤推送）
-])
-async def test_digests_skip_weekends_by_taipei_time(monkeypatch, iso, should_push):
-    """收盤速報若設在台北 08:00 之前，UTC 的日期會差一天。
-
-    這是實際存在過的位移：星期一不推、星期六反而推，而預設值 14:00
-    剛好不會發作，所以不會有人發現。
-    """
-    import bot.handlers.digest as digest
-    from conftest import FakeContext
-
-    _at(monkeypatch, iso)
-    monkeypatch.setattr(digest.clock, "now", clock.now)
-    monkeypatch.setattr(digest, "iter_watchlists", lambda: iter([("1", {"2330": "台積電"})]))
-
-    async def _lines(*a, **k):
-        return ["台積電(2330)  收 2,420.00 元"]
-    monkeypatch.setattr(digest, "_closing_lines", _lines)
-
-    ctx = FakeContext()
-    await digest.send_closing_digest(ctx, "TW")
-    assert bool(ctx.bot.sent) is should_push

@@ -18,7 +18,9 @@ from bot.services import clock
 from bot.services.formatting import name_label, price_with_change, quote_line
 from bot.services.market import fetch_market_summary
 from bot.services.news import fetch_and_summarize
-from bot.services.stock import get_stock_summary, intraday_quote, is_taiwan_stock
+from bot.services.stock import (
+    get_stock_summary, intraday_quote, is_taiwan_stock, last_session_date,
+)
 from bot.services.watchlist import get_watchlist, iter_watchlists
 
 logger = logging.getLogger(__name__)
@@ -30,27 +32,31 @@ def _closing_title(market: str) -> str:
     return "📊 台股收盤速報" if market == "TW" else "📊 美股收盤速報"
 
 
-def _is_stale_tw_quote(data: dict) -> bool:
-    """台股遇到休市日會回前一個交易日的收盤價，那不該當成「今天的收盤」。"""
-    data_date = (data.get("date") or "")[:10].replace("-", "/")
-    return bool(data_date) and data_date != clock.today_str("%Y/%m/%d")
-
-
-async def _closing_lines(tickers: list[str], market: str, skip_stale: bool) -> list[str]:
+async def _closing_lines(tickers: list[str], market: str, todays_session_only: bool) -> list[str]:
     """組出收盤速報的每一行。
 
-    定時推播要濾掉休市日的舊報價（否則週一到週五每天推同一個數字），
-    但 /testclosing 是手動觸發、目的就是看現在抓到什麼，不該濾。
+    todays_session_only：只留「今天這個市場真的有收盤」的那些。
+    定時推播一定要開，否則休市日會把上一個交易日的收盤當成今天的推出去；
+    /testclosing 是手動觸發、目的就是看現在抓到什麼，所以關掉。
+
+    判斷方式是問資料最後一根日線是哪一天，不是查假日表——週末、國定假日、
+    颱風假、半日市，一律涵蓋。
     """
-    results = await asyncio.gather(*[get_stock_summary(t) for t in tickers])
+    session = clock.market_today(market)
+    quotes = await asyncio.gather(*[get_stock_summary(t) for t in tickers])
+    sessions = (
+        await asyncio.gather(*[last_session_date(t) for t in tickers])
+        if todays_session_only else [session] * len(tickers)
+    )
+
     lines = []
-    for ticker, data in zip(tickers, results):
+    for ticker, data, last in zip(tickers, quotes, sessions):
         if not isinstance(data, dict) or data.get("error"):
             continue
-        if skip_stale and market == "TW" and _is_stale_tw_quote(data):
+        if last != session:
             continue
-        # 標題已經寫了日期；skip_stale 保證每一行都是今天的，所以不重複掛
-        lines.append(quote_line(ticker, data, show_date=not skip_stale))
+        # 標題已經寫了日期，逐行再掛一次是純噪音
+        lines.append(quote_line(ticker, data, show_date=not todays_session_only))
     return lines
 
 
@@ -59,16 +65,23 @@ def _for_market(tickers, market: str) -> list[str]:
 
 
 async def send_closing_digest(context: ContextTypes.DEFAULT_TYPE, market: str) -> None:
-    if clock.is_weekend():
+    """收盤速報。
+
+    ⚠️ 週末與日期都要用**該市場當地**的日曆，不是台北的。美股收盤速報排在
+    台北 05:30，而台北的星期六清晨是紐約的星期五傍晚——用台北日曆判斷，
+    星期五的美股收盤永遠不會推，星期一早上推的卻是星期五的資料標著星期一
+    的日期。數字全對、時間全錯，正是這個專案最常見的那種 bug。
+    """
+    if clock.market_is_weekend(market):
         return
-    today = clock.today_str("%Y/%m/%d")
+    today = clock.market_today_str(market)
 
     for user_id_str, items in iter_watchlists():
         tickers = _for_market(items, market)
         if not tickers:
             continue
         try:
-            lines = await _closing_lines(tickers, market, skip_stale=True)
+            lines = await _closing_lines(tickers, market, todays_session_only=True)
             if lines:
                 await context.bot.send_message(
                     chat_id=int(user_id_str),
@@ -93,46 +106,53 @@ async def send_us_closing(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ── 盤中速報 ──────────────────────────────────────────────────────────
 
-async def _intraday_lines(tickers: list[str]) -> list[str]:
+async def _intraday_lines(names: dict[str, str]) -> list[str]:
     """盤中的每一行。
 
     ⚠️ 這裡不能用 get_stock_summary：台股報價走 TWSE 盤後結算，中午查
-    只會拿到**前一個交易日**的收盤價，而畫面上看不出來。走 yfinance 的
-    即時價（跟價格提醒同一條路），並標「現價」而不是「收」。
+    只會拿到**前一個交易日**的收盤價，而畫面上看不出來。走 intraday_quote
+    （跟價格提醒同一條路），並標「現價」而不是「收」。
+
+    names 是**這個使用者自己的**自選股名稱。以前是拿一個全域查表函式去找，
+    多使用者時第一個人取的名字會出現在第二個人的推播裡——跟最近查詢紀錄
+    當初是全域共用的同一種錯。
     """
+    tickers = list(names)
     quotes = await asyncio.gather(*[intraday_quote(t) for t in tickers])
     lines = []
     for ticker, (price, prev) in zip(tickers, quotes):
         if price is None:
             continue
         market = "TW" if is_taiwan_stock(ticker) else "US"
-        label = name_label(ticker, _watch_name(ticker))
+        label = name_label(ticker, names.get(ticker) or "")
         lines.append(f"{label}  現價 {price_with_change(price, prev, market)}")
     return lines
 
 
-def _watch_name(ticker: str) -> str:
-    for _, items in iter_watchlists():
-        if ticker in items:
-            return items[ticker] or ""
-    return ""
-
-
 async def send_noon_snapshot(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """台股盤中速報（預設中午 12:00，台股 09:00–13:30 開盤中）。"""
-    if clock.is_weekend():
+    """台股盤中速報（預設中午 12:00，台股 09:00–13:30 開盤中）。
+
+    休市日不推。判斷方式跟收盤速報一樣是問資料「今天有沒有開」，
+    不是查假日表——否則颱風假那天會推一整排 +0.00%。
+    """
+    if clock.market_is_weekend("TW"):
         return
+
     for user_id_str, items in iter_watchlists():
-        tickers = _for_market(items, "TW")
-        if not tickers:
+        names = {t: n for t, n in items.items() if is_taiwan_stock(t)}
+        if not names:
             continue
         try:
-            lines = await _intraday_lines(tickers)
+            session = await last_session_date(next(iter(names)))
+            if session != clock.market_today("TW"):
+                logger.info("noon snapshot skipped: 台股今天沒開（最後一場 %s）", session)
+                return
+            lines = await _intraday_lines(names)
             if lines:
                 await context.bot.send_message(
                     chat_id=int(user_id_str),
-                    text=f"🕛 台股盤中速報 {clock.today_str('%m/%d')} "
-                         f"{clock.now():%H:%M}\n\n" + "\n".join(lines),
+                    text=f"🕛 台股盤中速報 {clock.market_today_str('TW', '%m/%d')} "
+                         f"{clock.market_now('TW'):%H:%M}\n\n" + "\n".join(lines),
                 )
         except Exception as e:
             logger.error("Noon snapshot failed for user %s: %s", user_id_str, e, exc_info=True)
@@ -234,12 +254,12 @@ async def testclosing_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # 手動觸發不濾休市日的舊報價——目的就是看現在抓到什麼
-    lines = await _closing_lines(tickers, market, skip_stale=False)
+    lines = await _closing_lines(tickers, market, todays_session_only=False)
     if not lines:
         await update.message.reply_text("無法取得報價資料")
         return
     await update.message.reply_text(
-        f"{_closing_title(market)} {clock.today_str('%Y/%m/%d')}\n\n" + "\n".join(lines)
+        f"{_closing_title(market)} {clock.market_today_str(market)}\n\n" + "\n".join(lines)
     )
 
 

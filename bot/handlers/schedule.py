@@ -36,8 +36,10 @@ class Job:
 _JOBS: dict[str, Job] = {
     "news": Job("daily_news", "news", send_daily_news, "起床報",
                 ("06:00", "06:30", "07:00", "07:30")),
+    # 預設時間必須在美股收盤（16:00 ET ＝ 台北 04:00 夏令／05:00 冬令）之後。
+    # 別放 22:00——那是紐約 10:00，開盤後半小時，不是收盤。
     "us": Job("us_closing", "us_close", send_us_closing, "美股收盤速報",
-              ("05:00", "05:30", "06:00", "22:00")),
+              ("04:30", "05:00", "05:30", "06:00")),
     "noon": Job("noon_snapshot", "noon", send_noon_snapshot, "台股盤中速報",
                 ("11:00", "12:00", "13:00")),
     "tw": Job("tw_closing", "tw_close", send_tw_closing, "台股收盤速報",
