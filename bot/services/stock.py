@@ -3,7 +3,7 @@ import logging
 import re
 import httpx
 import yfinance as yf
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -118,32 +118,55 @@ async def _fetch_month(client: httpx.AsyncClient, stock_no: str, query_date: dat
             await asyncio.sleep(2 ** attempt)
     return []
 
+def _live_price(symbol: str) -> float | None:
+    """yfinance 的即時成交價。只取 last_price——previous_close 不可信。"""
+    try:
+        price = yf.Ticker(symbol).fast_info.last_price
+        return float(price) if price else None
+    except Exception:
+        return None
+
+
 def _intraday_sync(ticker: str) -> tuple:
     """(現價, 前收) 或 (None, None)。台股含上櫃 fallback。
 
-    跟 get_stock_summary 的差別是**時效**：台股報價走 TWSE 盤後結算，
-    盤中查到的是前一個交易日的收盤；這裡走 yfinance 的日線，盤中的
-    最後一列就是即時價。價格提醒、漲跌停偵測、盤中速報都用這條。
+    保證這兩個數字描述的是**今天**的漲跌。這件事比它看起來難：
 
-    ⚠️ 不要改回 fast_info.previous_close——它會給錯的前收。實測 2026-09-01：
+    1. 不能用 get_stock_summary——台股走 TWSE 盤後結算，盤中查到的是
+       前一個交易日的收盤，而畫面上看不出來。
+    2. 不能用 fast_info.previous_close——它給錯的前收。實測 2026-09-01：
+       台積電說 2,395（那是當天開盤價）、南亞科說 549（什麼都不是）。
+    3. **不能假設日線的最後一列就是今天**。開盤後幾分鐘 yfinance 還沒
+       產出當日那一列，於是「倒數第一列 vs 倒數第二列」算出來的是
+       **昨天**的漲跌。實測 2026-09-02 09:03 就這樣把昨天的聯發科漲停
+       當成今天的推播出去。
 
-        台積電  fast_info 說 2,395（那是當天開盤價）  正確是 2,405
-        南亞科  fast_info 說   549（什麼都不是）      正確是   543
-        聯發科  fast_info 說 3,925  ✓ 剛好對
-
-    前收是漲跌停價與 ±5% 提醒的分母，錯了會漏報或誤報。日線的倒數第二列
-    才是可靠的，而且實測還比 fast_info 快（16ms vs 39ms）。
+    所以這裡看的是那一列的**日期**，而不是它的位置。history 的索引帶著
+    交易所時區（Asia/Taipei／America/New_York），台股美股各自比對當地
+    日期，不用硬寫時差。
     """
     symbols = [f"{ticker}.TW", f"{ticker}.TWO"] if is_taiwan_stock(ticker) else [ticker]
     for symbol in symbols:
         try:
             closes = yf.Ticker(symbol).history(period="5d")["Close"].dropna()
-            if len(closes) >= 2:
-                return float(closes.iloc[-1]), float(closes.iloc[-2])
-            if len(closes) == 1:
-                return float(closes.iloc[-1]), None
         except Exception:
             continue
+        if closes.empty:
+            continue
+
+        stamp = closes.index[-1]
+        today = datetime.now(stamp.tzinfo).date() if stamp.tzinfo else date.today()
+
+        if stamp.date() == today:
+            prev = float(closes.iloc[-2]) if len(closes) >= 2 else None
+            return float(closes.iloc[-1]), prev
+
+        # 今天的日線還沒出現 → 現價走即時報價，前收＝最後一個收盤。
+        # 這樣算出來一定是「現在 vs 上一個收盤」，不會變成昨天的漲跌。
+        # 連即時價都拿不到就回 None，讓呼叫端跳過——十分鐘後那一輪會補上。
+        live = _live_price(symbol)
+        return (live, float(closes.iloc[-1])) if live else (None, None)
+
     logger.warning("intraday quote failed for %s", ticker)
     return None, None
 
